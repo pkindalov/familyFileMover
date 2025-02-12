@@ -32,13 +32,39 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
+class ScrollableFrame(tk.Frame):
+    """A scrollable frame that holds widgets inside a fixed-height canvas."""
+
+    def __init__(self, container, height=300, *args, **kwargs):
+        super().__init__(container, *args, **kwargs)
+        # Create a canvas with a fixed height
+        self.canvas = tk.Canvas(self, height=height)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        # Create an inner frame that will hold the actual widgets
+        self.inner_frame = tk.Frame(self.canvas)
+        self.inner_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
+
+
 class FamilyFileMover(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Family File Mover")
-        self.geometry("800x600")
+        self.geometry("800x700")
 
         self.settings = load_settings()
+        # Dictionary to hold file names and their associated BooleanVar for selection.
+        self.file_check_vars = {}
+        # Variable for "Select All" checkbox.
+        self.select_all_var = tk.BooleanVar(value=False)
 
         # --- Source Folder Section (Row 0) ---
         tk.Label(self, text="Source Folder:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
@@ -73,39 +99,42 @@ class FamilyFileMover(tk.Tk):
         self.all_files_cb = tk.Checkbutton(self.file_types_frame, text="All Files",
                                            variable=self.all_files_var, command=self.toggle_file_types)
         self.all_files_cb.grid(row=0, column=0, padx=5, pady=5)
-
         self.images_cb = tk.Checkbutton(self.file_types_frame, text="Images", variable=self.images_var)
         self.images_cb.grid(row=0, column=1, padx=5, pady=5)
-
         self.videos_cb = tk.Checkbutton(self.file_types_frame, text="Videos", variable=self.videos_var)
         self.videos_cb.grid(row=0, column=2, padx=5, pady=5)
-
         self.documents_cb = tk.Checkbutton(self.file_types_frame, text="Documents", variable=self.documents_var)
         self.documents_cb.grid(row=0, column=3, padx=5, pady=5)
-
         self.music_cb = tk.Checkbutton(self.file_types_frame, text="Music", variable=self.music_var)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
-
-        # Disable specific options if "All Files" is checked.
         self.toggle_file_types()
 
-        # --- Files List Section (Row 4) ---
-        tk.Label(self, text="Files to Move:").grid(row=4, column=0, padx=10, pady=10, sticky="nw")
-        self.file_listbox = tk.Listbox(self, width=60, height=10)
-        self.file_listbox.grid(row=4, column=1, padx=10, pady=10)
+        # --- Select All Checkbox (Row 4) ---
+        tk.Checkbutton(self, text="Select All", variable=self.select_all_var,
+                       command=self.toggle_select_all) \
+            .grid(row=4, column=1, sticky="w", padx=10, pady=5)
+
+        # --- Files List Section (Row 5) ---
+        tk.Label(self, text="Files to Move:").grid(row=5, column=0, padx=10, pady=10, sticky="nw")
+        self.file_checkbox_frame = ScrollableFrame(self, height=300)
+        self.file_checkbox_frame.grid(row=5, column=1, padx=10, pady=10, sticky="nsew")
         tk.Button(self, text="Refresh Files", command=self.refresh_file_list) \
-            .grid(row=4, column=2, padx=10, pady=10)
+            .grid(row=5, column=2, padx=10, pady=10)
 
-        # --- Transfer Button (Row 5) ---
+        # --- Transfer Button (Row 6) ---
         tk.Button(self, text="Transfer Files", command=self.transfer_files) \
-            .grid(row=5, column=1, padx=10, pady=10)
+            .grid(row=6, column=1, padx=10, pady=10)
 
-        # --- Progress Bar (Row 6) ---
+        # --- Progress Bar (Row 7) ---
         self.progress = ttk.Progressbar(self, orient="horizontal", length=300, mode="determinate")
-        self.progress.grid(row=6, column=1, padx=10, pady=10)
+        self.progress.grid(row=7, column=1, padx=10, pady=10)
 
         self.populate_fields()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Configure grid weights for resizing
+        self.grid_rowconfigure(5, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
     def populate_fields(self):
         """Populate fields from saved settings, if available."""
@@ -113,7 +142,7 @@ class FamilyFileMover(tk.Tk):
             self.source_entry.insert(0, self.settings["source_folder"])
         if "destination_folder" in self.settings:
             self.dest_entry.insert(0, self.settings["destination_folder"])
-        # Use the saved base folder if available; otherwise default to "FamilyMedia"
+        # Use saved base folder if available; otherwise default to "FamilyMedia"
         if "base_folder" in self.settings and self.settings["base_folder"].strip():
             self.base_entry.insert(0, self.settings["base_folder"])
         else:
@@ -201,9 +230,19 @@ class FamilyFileMover(tk.Tk):
             self.documents_cb.config(state="normal")
             self.music_cb.config(state="normal")
 
+    def toggle_select_all(self):
+        """Set all file selection checkboxes to the value of the 'Select All' checkbox."""
+        new_value = self.select_all_var.get()
+        for var in self.file_check_vars.values():
+            var.set(new_value)
+
     def refresh_file_list(self):
-        """Populate the file list from the source directory, filtering by the selected file types."""
-        self.file_listbox.delete(0, tk.END)
+        """Populate the file checkbox list from the source directory, filtering by the selected file types."""
+        # Clear existing checkbuttons in the inner frame of the scrollable frame.
+        for widget in self.file_checkbox_frame.inner_frame.winfo_children():
+            widget.destroy()
+        self.file_check_vars = {}
+
         source_dir = self.source_entry.get().strip()
         if not source_dir or not os.path.isdir(source_dir):
             return
@@ -222,12 +261,17 @@ class FamilyFileMover(tk.Tk):
             allowed_extensions = list(set(allowed_extensions))
 
         try:
-            for file in os.listdir(source_dir):
+            files = os.listdir(source_dir)
+            for file in files:
                 if allowed_extensions is not None:
                     _, ext = os.path.splitext(file)
                     if ext.lower() not in allowed_extensions:
                         continue
-                self.file_listbox.insert(tk.END, file)
+                # Create the checkbox variable with default False (unchecked)
+                var = tk.BooleanVar(value=False)
+                chk = tk.Checkbutton(self.file_checkbox_frame.inner_frame, text=file, variable=var)
+                chk.pack(anchor="w", padx=5, pady=2)
+                self.file_check_vars[file] = var
         except Exception as e:
             messagebox.showerror("Error", f"Error reading source directory:\n{e}")
 
@@ -243,7 +287,7 @@ class FamilyFileMover(tk.Tk):
 
     def transfer_files(self):
         """
-        Transfer files from source to destination.
+        Transfer selected files from source to destination.
         For each file, organize it in the base folder under year/month/day folders (based on the file's creation date).
         If creation date is unavailable, the current date is used.
         If a file with the same name exists, a counter is appended.
@@ -259,19 +303,17 @@ class FamilyFileMover(tk.Tk):
             messagebox.showerror("Error", "Please select a valid destination folder.")
             return
 
-        files = self.file_listbox.get(0, tk.END)
-        if not files:
-            messagebox.showinfo("Info", "No files to transfer.")
+        # Only move files that are checked.
+        selected_files = [file for file, var in self.file_check_vars.items() if var.get()]
+        if not selected_files:
+            messagebox.showinfo("Info", "No files selected for transfer.")
             return
 
-        # Reset progress bar
+        total_files = len(selected_files)
         self.progress['value'] = 0
-        total_files = len(files)
 
-        for i, file in enumerate(files):
+        for i, file in enumerate(selected_files):
             src_path = os.path.join(source, file)
-
-            # Try to get the file's creation date; if unavailable, use the current date.
             try:
                 ctime = os.path.getctime(src_path)
                 dt = datetime.fromtimestamp(ctime)
@@ -282,7 +324,7 @@ class FamilyFileMover(tk.Tk):
             month = dt.strftime("%m")
             day = dt.strftime("%d")
 
-            # Construct the target directory path: destination / base folder / year / month / day
+            # Build target directory: destination / base_folder / year / month / day
             target_dir = os.path.join(dest, base_folder, year, month, day)
             if not os.path.exists(target_dir):
                 try:
@@ -291,7 +333,6 @@ class FamilyFileMover(tk.Tk):
                     messagebox.showerror("Error", f"Failed to create directory {target_dir}:\n{e}")
                     continue
 
-            # Ensure the file name is unique in the target directory
             new_file = self.get_unique_filename(target_dir, file)
             dest_path = os.path.join(target_dir, new_file)
 
@@ -306,6 +347,8 @@ class FamilyFileMover(tk.Tk):
             self.update_idletasks()
 
         messagebox.showinfo("Info", "File transfer complete!")
+        # Reset progress bar after transfer
+        self.progress['value'] = 0
         self.refresh_file_list()
 
     def on_close(self):
