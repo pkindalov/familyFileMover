@@ -52,6 +52,7 @@ class FamilyFileMover(tk.Tk):
         super().__init__()
         self.title("Family File Mover")
         self.geometry("900x750")
+        self.resizable(False, False)  # Disable maximize (window resizing)
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
 
@@ -110,7 +111,7 @@ class FamilyFileMover(tk.Tk):
         self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music",
                                         variable=self.music_var, command=self.refresh_file_list)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
-        self.toggle_file_types()  # This refreshes the list if needed
+        self.toggle_file_types()  # refresh list if needed
 
         # ---------------- File List Selection Frame ----------------
         self.file_list_frame = ttk.LabelFrame(self.container, text="Select Files to Move", padding="10")
@@ -224,7 +225,6 @@ class FamilyFileMover(tk.Tk):
                     _, ext = os.path.splitext(file)
                     if ext.lower() not in allowed_extensions:
                         continue
-                # Create the checkbox variable with initial value matching "Select All"
                 var = tk.BooleanVar(value=self.select_all_var.get())
                 chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=file, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
@@ -265,7 +265,8 @@ class FamilyFileMover(tk.Tk):
             except Exception:
                 dt = datetime.now()
             year = dt.strftime("%Y")
-            month = dt.strftime("%m")
+            # Use full month name instead of a number:
+            month = dt.strftime("%B")
             day = dt.strftime("%d")
             target_dir = os.path.join(dest, base_folder, year, month, day)
             if not os.path.exists(target_dir):
