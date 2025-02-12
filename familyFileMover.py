@@ -51,8 +51,9 @@ class FamilyFileMover(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Family File Mover")
-        self.geometry("900x750")
-        self.resizable(False, False)  # Disable maximize (window resizing)
+        # Remove fixed geometry so width is auto sized.
+        # self.geometry("900x750")
+        self.resizable(False, False)  # Disable window resizing (maximize)
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
 
@@ -144,6 +145,9 @@ class FamilyFileMover(tk.Tk):
         self.refresh_file_list()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        # Update the window geometry to the requested size (auto width)
+        self.update_idletasks()
+        self.geometry("")
 
     def populate_fields(self):
         if "source_folder" in self.settings:
@@ -265,8 +269,7 @@ class FamilyFileMover(tk.Tk):
             except Exception:
                 dt = datetime.now()
             year = dt.strftime("%Y")
-            # Use full month name instead of a number:
-            month = dt.strftime("%B")
+            month = dt.strftime("%B")  # Full month name
             day = dt.strftime("%d")
             target_dir = os.path.join(dest, base_folder, year, month, day)
             if not os.path.exists(target_dir):
