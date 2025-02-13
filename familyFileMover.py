@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
 import json
 import shutil
@@ -43,7 +43,7 @@ def save_settings(settings):
 
 # Updated helper function to get the "date taken" from EXIF metadata.
 def get_date_taken(file_path):
-    # If the file is a HEIC image, try using Pillow's getexif() (if available)
+    # For HEIC files, try using Pillow's getexif() method.
     if file_path.lower().endswith('.heic'):
         if Image is not None:
             try:
@@ -51,18 +51,16 @@ def get_date_taken(file_path):
                 if hasattr(image, "getexif"):
                     exif_data = image.getexif()
                     if exif_data:
-                        # exif_data is an Exif object (dict-like)
                         for tag, value in exif_data.items():
                             decoded = ExifTags.TAGS.get(tag, tag)
                             if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
-                                # Expecting format "YYYY:MM:DD HH:MM:SS"
+                                # Expected format "YYYY:MM:DD HH:MM:SS"
                                 return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
-            except Exception as e:
-                # Suppress errors for HEIC if not recognized
+            except Exception:
                 pass
         return None
 
-    # For non-HEIC files, try exifread first.
+    # For non-HEIC files, first try exifread.
     if exifread is not None:
         try:
             with open(file_path, 'rb') as f:
@@ -80,7 +78,7 @@ def get_date_taken(file_path):
                 pass
             else:
                 print("exifread error:", e)
-    # Next, try using Pillow's getexif() (or legacy _getexif())
+    # Next, try using Pillow.
     if Image is not None:
         try:
             image = Image.open(file_path)
@@ -90,7 +88,6 @@ def get_date_taken(file_path):
             elif hasattr(image, "_getexif"):
                 exif_data = image._getexif()
             if exif_data:
-                # exif_data might be a dict or an Exif object
                 date_str = None
                 if isinstance(exif_data, dict):
                     exif = {ExifTags.TAGS.get(tag, tag): value for tag, value in exif_data.items()}
@@ -103,8 +100,7 @@ def get_date_taken(file_path):
                             break
                 if date_str:
                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-        except Exception as e:
-            # Suppress any PIL errors here
+        except Exception:
             pass
     return None
 
@@ -221,12 +217,29 @@ class FamilyFileMover(tk.Tk):
         self.progress = ttk.Progressbar(self.transfer_frame, orient="horizontal", mode="determinate", length=300)
         self.progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
+        # ---------------- Error Log Frame ----------------
+        self.error_log_frame = ttk.LabelFrame(self.container, text="Error Log", padding="10")
+        self.error_log_frame.grid(row=4, column=0, sticky="ew", pady=5)
+        self.error_log = scrolledtext.ScrolledText(self.error_log_frame, height=5, state="disabled", wrap="word")
+        self.error_log.pack(fill="both", expand=True, padx=5, pady=5)
+
         self.populate_fields()
         self.refresh_file_list()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.update_idletasks()
         self.geometry("")
+
+    def log_error(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.error_log.configure(state="normal")
+        self.error_log.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.error_log.see(tk.END)
+        self.error_log.configure(state="disabled")
+
+    def show_and_log_error(self, title, message):
+        messagebox.showerror(title, message)
+        self.log_error(message)
 
     def populate_fields(self):
         if "source_folder" in self.settings:
@@ -313,7 +326,7 @@ class FamilyFileMover(tk.Tk):
                 chk.pack(anchor="w", padx=5, pady=2)
                 self.file_check_vars[file] = var
         except Exception as e:
-            messagebox.showerror("Error", f"Error reading source directory:\n{e}")
+            self.show_and_log_error("Error", f"Error reading source directory:\n{e}")
 
     def get_unique_filename(self, directory, filename):
         base, ext = os.path.splitext(filename)
@@ -329,10 +342,10 @@ class FamilyFileMover(tk.Tk):
         dest = self.dest_entry.get().strip()
         base_folder = self.base_entry.get().strip() or "FamilyMedia"
         if not source or not os.path.isdir(source):
-            messagebox.showerror("Error", "Please select a valid source folder.")
+            self.show_and_log_error("Error", "Please select a valid source folder.")
             return
         if not dest or not os.path.isdir(dest):
-            messagebox.showerror("Error", "Please select a valid destination folder.")
+            self.show_and_log_error("Error", "Please select a valid destination folder.")
             return
         selected_files = [file for file, var in self.file_check_vars.items() if var.get()]
         if not selected_files:
@@ -342,7 +355,6 @@ class FamilyFileMover(tk.Tk):
         self.progress['value'] = 0
         for i, file in enumerate(selected_files):
             src_path = os.path.join(source, file)
-            # Try to get "date taken" from EXIF metadata.
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
@@ -358,14 +370,14 @@ class FamilyFileMover(tk.Tk):
                 try:
                     os.makedirs(target_dir)
                 except Exception as e:
-                    messagebox.showerror("Error", f"Failed to create directory {target_dir}:\n{e}")
+                    self.show_and_log_error("Error", f"Failed to create directory {target_dir}:\n{e}")
                     continue
             new_file = self.get_unique_filename(target_dir, file)
             dest_path = os.path.join(target_dir, new_file)
             try:
                 shutil.move(src_path, dest_path)
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to move file '{file}': {e}")
+                self.show_and_log_error("Error", f"Failed to move file '{file}': {e}")
                 continue
             self.progress['value'] = ((i + 1) / total_files) * 100
             self.update_idletasks()
