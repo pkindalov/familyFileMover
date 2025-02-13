@@ -64,10 +64,10 @@ class ErrorLogger:
     def flush(self):
         pass
 
-# Updated helper function to get the "date taken" from metadata.
+# Helper function to get the "date taken" from metadata.
 def get_date_taken(file_path):
     ext = os.path.splitext(file_path)[1].lower()
-    # For document files, try to extract from DOCX core properties.
+    # For document files:
     document_extensions = {".doc", ".docx", ".txt"}
     if ext in document_extensions:
         if ext == ".docx":
@@ -79,23 +79,20 @@ def get_date_taken(file_path):
                 created_elem = root.find("dcterms:created", ns)
                 if created_elem is not None and created_elem.text:
                     date_str = created_elem.text.strip()
+                    # DOCX dates are typically ISO formatted (e.g. "2025-01-29T12:34:56Z")
                     if date_str.endswith("Z"):
                         date_str = date_str[:-1]
                     try:
                         return datetime.fromisoformat(date_str)
                     except Exception:
                         return datetime.fromisoformat(date_str.rstrip("Z"))
-            except KeyError as e:
-                sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
-                return None
             except Exception as e:
                 sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
                 return None
         else:
-            # For .doc and .txt, no embedded date is available.
             return None
 
-    # For video files, try to extract video metadata using pymediainfo.
+    # For video files:
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
         if MediaInfo is not None:
@@ -115,7 +112,7 @@ def get_date_taken(file_path):
                 sys.stderr.write(f"Error extracting video metadata from file '{file_path}': {e}\n")
         return None
 
-    # For HEIC files, try using Pillow's getexif() method.
+    # For HEIC files:
     if file_path.lower().endswith('.heic'):
         if Image is not None:
             try:
@@ -131,7 +128,7 @@ def get_date_taken(file_path):
                 pass
         return None
 
-    # For non-HEIC, non-video, non-document files, first try exifread.
+    # For other files (e.g. JPEG, PNG):
     if exifread is not None:
         try:
             with open(file_path, 'rb') as f:
@@ -146,7 +143,6 @@ def get_date_taken(file_path):
                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
         except Exception as e:
             sys.stderr.write(f"Error reading file '{file_path}' with exifread: {e}\n")
-    # Next, try using Pillow.
     if Image is not None:
         try:
             image = Image.open(file_path)
@@ -236,13 +232,26 @@ class FamilyFileMover(tk.Tk):
         self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music", variable=self.music_var, command=self.refresh_file_list)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
         self.toggle_file_types()
+        # Conversion Settings Frame (New)
+        self.conversion_frame = ttk.LabelFrame(self.container, text="Conversion Settings", padding="10")
+        self.conversion_frame.grid(row=2, column=0, sticky="ew", pady=5)
+        # Two comboboxes: one for input format and one for output format.
+        ttk.Label(self.conversion_frame, text="Convert Input Format:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.convert_input = tk.StringVar(value="None")
+        self.input_combo = ttk.Combobox(self.conversion_frame, textvariable=self.convert_input, state="readonly",
+                                        values=["None", "heic", "jpg", "png", "gif", "bmp"])
+        self.input_combo.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(self.conversion_frame, text="To Output Format:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        self.convert_output = tk.StringVar(value="None")
+        self.output_combo = ttk.Combobox(self.conversion_frame, textvariable=self.convert_output, state="readonly",
+                                         values=["None", "jpg", "png", "gif", "bmp"])
+        self.output_combo.grid(row=0, column=3, padx=5, pady=5)
         # File List Selection Frame
         self.file_list_frame = ttk.LabelFrame(self.container, text="Select Files to Move", padding="10")
-        self.file_list_frame.grid(row=2, column=0, sticky="nsew", pady=5)
-        self.container.rowconfigure(2, weight=1)
+        self.file_list_frame.grid(row=3, column=0, sticky="nsew", pady=5)
+        self.container.rowconfigure(3, weight=1)
         self.select_all_cb = ttk.Checkbutton(self.file_list_frame, text="Select All", variable=self.select_all_var, command=self.toggle_select_all)
         self.select_all_cb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        # New: Selection count label
         self.selection_count_label = ttk.Label(self.file_list_frame, text="Selected: 0 / 0")
         self.selection_count_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
@@ -253,7 +262,7 @@ class FamilyFileMover(tk.Tk):
         self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
         # Transfer Controls Frame
         self.transfer_frame = ttk.Frame(self.container, padding="10")
-        self.transfer_frame.grid(row=3, column=0, sticky="ew", pady=5)
+        self.transfer_frame.grid(row=4, column=0, sticky="ew", pady=5)
         self.transfer_frame.columnconfigure(1, weight=1)
         self.transfer_button = ttk.Button(self.transfer_frame, text="Transfer Files", command=self.transfer_files)
         self.transfer_button.grid(row=0, column=0, padx=5, pady=5)
@@ -261,7 +270,7 @@ class FamilyFileMover(tk.Tk):
         self.progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         # Error Log Frame
         self.error_log_frame = ttk.LabelFrame(self.container, text="Error Log", padding="10")
-        self.error_log_frame.grid(row=4, column=0, sticky="ew", pady=5)
+        self.error_log_frame.grid(row=5, column=0, sticky="ew", pady=5)
         self.error_log = scrolledtext.ScrolledText(self.error_log_frame, height=5, state="disabled", wrap="word")
         self.error_log.pack(fill="both", expand=True, padx=5, pady=5)
         self.populate_fields()
@@ -370,7 +379,6 @@ class FamilyFileMover(tk.Tk):
                     if ext.lower() not in allowed_extensions:
                         continue
                 var = tk.BooleanVar(value=self.select_all_var.get())
-                # Add a trace to update selection count on change.
                 var.trace_add("write", lambda *args: self.update_selection_count())
                 chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=file, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
@@ -424,13 +432,32 @@ class FamilyFileMover(tk.Tk):
                 except Exception as e:
                     self.show_and_log_error("Error", f"Failed to create directory {target_dir} for file '{file}':\n{e}")
                     continue
-            new_file = self.get_unique_filename(target_dir, file)
-            dest_path = os.path.join(target_dir, new_file)
-            try:
-                shutil.move(src_path, dest_path)
-            except Exception as e:
-                self.show_and_log_error("Error", f"Failed to move file '{file}': {e}")
-                continue
+            # Check if conversion is enabled.
+            conv_in = self.convert_input.get().lower()
+            conv_out = self.convert_output.get().lower()
+            file_ext = os.path.splitext(file)[1].lower()
+            converted = False
+            if conv_in != "none" and conv_out != "none" and file_ext == "." + conv_in:
+                try:
+                    im = Image.open(src_path)
+                    format_mapping = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "gif": "GIF", "bmp": "BMP"}
+                    out_format = format_mapping.get(conv_out, conv_out.upper())
+                    # Build a new file name with the new extension.
+                    new_file = os.path.splitext(file)[0] + "." + conv_out
+                    dest_path = os.path.join(target_dir, new_file)
+                    im.convert("RGB").save(dest_path, out_format)
+                    os.remove(src_path)
+                    converted = True
+                except Exception as e:
+                    self.show_and_log_error("Error", f"Failed to convert file '{file}': {e}")
+            if not converted:
+                new_file = self.get_unique_filename(target_dir, file)
+                dest_path = os.path.join(target_dir, new_file)
+                try:
+                    shutil.move(src_path, dest_path)
+                except Exception as e:
+                    self.show_and_log_error("Error", f"Failed to move file '{file}': {e}")
+                    continue
             self.progress['value'] = ((i + 1) / total_files) * 100
             self.update_idletasks()
         messagebox.showinfo("Info", "File transfer complete!")
