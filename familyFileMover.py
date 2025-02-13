@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
+import sys
 import json
 import shutil
 from datetime import datetime
@@ -41,6 +42,21 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=4)
 
+# Custom error logger class to redirect sys.stderr to a Tkinter text widget.
+class ErrorLogger:
+    def __init__(self, widget):
+        self.widget = widget
+    def write(self, message):
+        # Write only non-empty messages.
+        if message.strip():
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.widget.configure(state="normal")
+            self.widget.insert(tk.END, f"[{timestamp}] {message}")
+            self.widget.see(tk.END)
+            self.widget.configure(state="disabled")
+    def flush(self):
+        pass
+
 # Updated helper function to get the "date taken" from EXIF metadata.
 def get_date_taken(file_path):
     # For HEIC files, try using Pillow's getexif() method.
@@ -54,7 +70,6 @@ def get_date_taken(file_path):
                         for tag, value in exif_data.items():
                             decoded = ExifTags.TAGS.get(tag, tag)
                             if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
-                                # Expected format "YYYY:MM:DD HH:MM:SS"
                                 return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
             except Exception:
                 pass
@@ -72,12 +87,8 @@ def get_date_taken(file_path):
                 if date_tag:
                     date_str = str(date_tag)
                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-        except Exception as e:
-            err = str(e).lower()
-            if "file format not recognized" in err or "hdlr" in err:
-                pass
-            else:
-                print("exifread error:", e)
+        except Exception:
+            pass
     # Next, try using Pillow.
     if Image is not None:
         try:
@@ -226,6 +237,9 @@ class FamilyFileMover(tk.Tk):
         self.populate_fields()
         self.refresh_file_list()
 
+        # Redirect sys.stderr to our error log widget.
+        sys.stderr = ErrorLogger(self.error_log)
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.update_idletasks()
         self.geometry("")
@@ -355,6 +369,7 @@ class FamilyFileMover(tk.Tk):
         self.progress['value'] = 0
         for i, file in enumerate(selected_files):
             src_path = os.path.join(source, file)
+            # Try to get "date taken" from EXIF metadata.
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
