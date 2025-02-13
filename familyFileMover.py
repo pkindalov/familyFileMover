@@ -4,9 +4,28 @@ import os
 import json
 import shutil
 from datetime import datetime
+from io import BytesIO
+
+# Register HEIC support for Pillow.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    print("pillow-heif not installed; HEIC files may not be processed correctly.")
+
+# Try importing exifread for improved EXIF extraction.
+try:
+    import exifread
+except ImportError:
+    exifread = None
+
+# Also import Pillow.
+try:
+    from PIL import Image, ExifTags
+except ImportError:
+    Image = None
 
 SETTINGS_FILE = "settings.json"
-
 
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
@@ -18,15 +37,79 @@ def load_settings():
     else:
         return {}
 
-
 def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=4)
 
+# Updated helper function to get the "date taken" from EXIF metadata.
+def get_date_taken(file_path):
+    # If the file is a HEIC image, try using Pillow's getexif() (if available)
+    if file_path.lower().endswith('.heic'):
+        if Image is not None:
+            try:
+                image = Image.open(file_path)
+                if hasattr(image, "getexif"):
+                    exif_data = image.getexif()
+                    if exif_data:
+                        # exif_data is an Exif object (dict-like)
+                        for tag, value in exif_data.items():
+                            decoded = ExifTags.TAGS.get(tag, tag)
+                            if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
+                                # Expecting format "YYYY:MM:DD HH:MM:SS"
+                                return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
+            except Exception as e:
+                # Suppress errors for HEIC if not recognized
+                pass
+        return None
+
+    # For non-HEIC files, try exifread first.
+    if exifread is not None:
+        try:
+            with open(file_path, 'rb') as f:
+                try:
+                    tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False)
+                except Exception:
+                    tags = {}
+                date_tag = tags.get("EXIF DateTimeOriginal")
+                if date_tag:
+                    date_str = str(date_tag)
+                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        except Exception as e:
+            err = str(e).lower()
+            if "file format not recognized" in err or "hdlr" in err:
+                pass
+            else:
+                print("exifread error:", e)
+    # Next, try using Pillow's getexif() (or legacy _getexif())
+    if Image is not None:
+        try:
+            image = Image.open(file_path)
+            exif_data = None
+            if hasattr(image, "getexif"):
+                exif_data = image.getexif()
+            elif hasattr(image, "_getexif"):
+                exif_data = image._getexif()
+            if exif_data:
+                # exif_data might be a dict or an Exif object
+                date_str = None
+                if isinstance(exif_data, dict):
+                    exif = {ExifTags.TAGS.get(tag, tag): value for tag, value in exif_data.items()}
+                    date_str = exif.get("DateTimeOriginal") or exif.get("DateTimeDigitized") or exif.get("DateTime")
+                else:
+                    for tag, value in exif_data.items():
+                        decoded = ExifTags.TAGS.get(tag, tag)
+                        if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
+                            date_str = value
+                            break
+                if date_str:
+                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        except Exception as e:
+            # Suppress any PIL errors here
+            pass
+    return None
 
 class ScrollableFrame(ttk.Frame):
     """A scrollable frame that holds widgets inside a fixed-height canvas."""
-
     def __init__(self, container, height=300, *args, **kwargs):
         super().__init__(container, *args, **kwargs)
         self.canvas = tk.Canvas(self, height=height, borderwidth=0)
@@ -46,13 +129,10 @@ class ScrollableFrame(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-
 class FamilyFileMover(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Family File Mover")
-        # Remove fixed geometry so width is auto sized.
-        # self.geometry("900x750")
         self.resizable(False, False)  # Disable window resizing (maximize)
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
@@ -145,7 +225,6 @@ class FamilyFileMover(tk.Tk):
         self.refresh_file_list()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        # Update the window geometry to the requested size (auto width)
         self.update_idletasks()
         self.geometry("")
 
@@ -263,11 +342,14 @@ class FamilyFileMover(tk.Tk):
         self.progress['value'] = 0
         for i, file in enumerate(selected_files):
             src_path = os.path.join(source, file)
-            try:
-                ctime = os.path.getctime(src_path)
-                dt = datetime.fromtimestamp(ctime)
-            except Exception:
-                dt = datetime.now()
+            # Try to get "date taken" from EXIF metadata.
+            dt = get_date_taken(src_path)
+            if dt is None:
+                try:
+                    ctime = os.path.getctime(src_path)
+                    dt = datetime.fromtimestamp(ctime)
+                except Exception:
+                    dt = datetime.now()
             year = dt.strftime("%Y")
             month = dt.strftime("%B")  # Full month name
             day = dt.strftime("%d")
@@ -304,7 +386,6 @@ class FamilyFileMover(tk.Tk):
         }
         save_settings(self.settings)
         self.destroy()
-
 
 if __name__ == "__main__":
     app = FamilyFileMover()
