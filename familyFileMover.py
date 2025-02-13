@@ -42,12 +42,11 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=4)
 
-# Custom error logger class to redirect sys.stderr to a Tkinter text widget.
+# Custom error logger class to redirect sys.stderr to the error log widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
     def write(self, message):
-        # Write only non-empty messages.
         if message.strip():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.widget.configure(state="normal")
@@ -71,8 +70,8 @@ def get_date_taken(file_path):
                             decoded = ExifTags.TAGS.get(tag, tag)
                             if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
                                 return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
-            except Exception:
-                pass
+            except Exception as e:
+                sys.stderr.write(f"Error processing HEIC file '{file_path}': {e}\n")
         return None
 
     # For non-HEIC files, first try exifread.
@@ -81,14 +80,15 @@ def get_date_taken(file_path):
             with open(file_path, 'rb') as f:
                 try:
                     tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal", details=False)
-                except Exception:
+                except Exception as e:
+                    sys.stderr.write(f"exifread error for file '{file_path}': {e}\n")
                     tags = {}
                 date_tag = tags.get("EXIF DateTimeOriginal")
                 if date_tag:
                     date_str = str(date_tag)
                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-        except Exception:
-            pass
+        except Exception as e:
+            sys.stderr.write(f"Error reading file '{file_path}' with exifread: {e}\n")
     # Next, try using Pillow.
     if Image is not None:
         try:
@@ -111,8 +111,8 @@ def get_date_taken(file_path):
                             break
                 if date_str:
                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-        except Exception:
-            pass
+        except Exception as e:
+            sys.stderr.write(f"Error extracting EXIF with Pillow for file '{file_path}': {e}\n")
     return None
 
 class ScrollableFrame(ttk.Frame):
@@ -385,7 +385,7 @@ class FamilyFileMover(tk.Tk):
                 try:
                     os.makedirs(target_dir)
                 except Exception as e:
-                    self.show_and_log_error("Error", f"Failed to create directory {target_dir}:\n{e}")
+                    self.show_and_log_error("Error", f"Failed to create directory {target_dir} for file '{file}':\n{e}")
                     continue
             new_file = self.get_unique_filename(target_dir, file)
             dest_path = os.path.join(target_dir, new_file)
