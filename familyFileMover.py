@@ -6,6 +6,8 @@ import json
 import shutil
 from datetime import datetime
 from io import BytesIO
+import zipfile
+import xml.etree.ElementTree as ET
 
 # Register HEIC support for Pillow.
 try:
@@ -19,6 +21,12 @@ try:
     import exifread
 except ImportError:
     exifread = None
+
+# Try importing pymediainfo for video metadata extraction.
+try:
+    from pymediainfo import MediaInfo
+except ImportError:
+    MediaInfo = None
 
 # Also import Pillow.
 try:
@@ -42,7 +50,7 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=4)
 
-# Custom error logger class to redirect sys.stderr to the error log widget.
+# Custom error logger to redirect sys.stderr to a Tkinter text widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -56,8 +64,61 @@ class ErrorLogger:
     def flush(self):
         pass
 
-# Updated helper function to get the "date taken" from EXIF metadata.
+# Updated helper function to get the "date taken" from metadata.
 def get_date_taken(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    # For document files, try to extract from DOCX core properties.
+    document_extensions = {".doc", ".docx", ".txt"}
+    if ext in document_extensions:
+        if ext == ".docx":
+            try:
+                with zipfile.ZipFile(file_path, "r") as z:
+                    try:
+                        core_xml = z.read("docProps/core.xml")
+                    except KeyError:
+                        sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': docProps/core.xml not found\n")
+                        return None
+                root = ET.fromstring(core_xml)
+                ns = {"dcterms": "http://purl.org/dc/terms/"}
+                created_elem = root.find("dcterms:created", ns)
+                if created_elem is not None and created_elem.text:
+                    date_str = created_elem.text.strip()
+                    # DOCX dates are typically in ISO format like "2025-01-29T12:34:56Z"
+                    if date_str.endswith("Z"):
+                        date_str = date_str[:-1]
+                    try:
+                        return datetime.fromisoformat(date_str)
+                    except Exception as e:
+                        sys.stderr.write(f"Error parsing docx date for file '{file_path}': {e}\n")
+                        return None
+            except Exception as e:
+                sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
+                return None
+        else:
+            # For .doc and .txt, no embedded date is available.
+            return None
+
+    # For video files, try to extract video metadata using pymediainfo.
+    video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
+    if ext in video_extensions:
+        if MediaInfo is not None:
+            try:
+                media_info = MediaInfo.parse(file_path)
+                for track in media_info.tracks:
+                    if track.track_type == "General":
+                        # Try to obtain a video date from various fields.
+                        date_str = track.tagged_date or track.encoded_date or getattr(track, "media_created", None) or getattr(track, "file_created_date", None)
+                        if date_str:
+                            if date_str.endswith("UTC"):
+                                date_str = date_str[:-3].strip()
+                            try:
+                                return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                            except Exception as e:
+                                sys.stderr.write(f"Error parsing video date for file '{file_path}': {e}\n")
+            except Exception as e:
+                sys.stderr.write(f"Error extracting video metadata from file '{file_path}': {e}\n")
+        return None
+
     # For HEIC files, try using Pillow's getexif() method.
     if file_path.lower().endswith('.heic'):
         if Image is not None:
@@ -70,11 +131,11 @@ def get_date_taken(file_path):
                             decoded = ExifTags.TAGS.get(tag, tag)
                             if decoded in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
                                 return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
-            except Exception as e:
-                sys.stderr.write(f"Error processing HEIC file '{file_path}': {e}\n")
+            except Exception:
+                pass
         return None
 
-    # For non-HEIC files, first try exifread.
+    # For non-HEIC, non-video, non-document files, first try exifread.
     if exifread is not None:
         try:
             with open(file_path, 'rb') as f:
@@ -140,21 +201,20 @@ class FamilyFileMover(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Family File Mover")
-        self.resizable(False, False)  # Disable window resizing (maximize)
+        self.resizable(False, False)
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
 
         self.settings = load_settings()
-        self.file_check_vars = {}  # Dictionary to hold each file's BooleanVar
+        self.file_check_vars = {}
         self.select_all_var = tk.BooleanVar(value=False)
 
-        # Main container with grid layout
         self.container = ttk.Frame(self, padding="10")
         self.container.grid(row=0, column=0, sticky="nsew")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-        # ---------------- Folder Settings Frame ----------------
+        # Folder Settings Frame
         self.folder_frame = ttk.LabelFrame(self.container, text="Folder Settings", padding="10")
         self.folder_frame.grid(row=0, column=0, sticky="ew", pady=5)
         self.folder_frame.columnconfigure(1, weight=1)
@@ -173,7 +233,7 @@ class FamilyFileMover(tk.Tk):
         self.base_entry = ttk.Entry(self.folder_frame, width=50)
         self.base_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=5)
 
-        # ---------------- File Type Selection Frame ----------------
+        # File Type Selection Frame
         self.file_types_frame = ttk.LabelFrame(self.container, text="File Type Selection", padding="10")
         self.file_types_frame.grid(row=1, column=0, sticky="ew", pady=5)
         self.file_types_frame.columnconfigure(0, weight=1)
@@ -199,9 +259,9 @@ class FamilyFileMover(tk.Tk):
         self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music",
                                         variable=self.music_var, command=self.refresh_file_list)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
-        self.toggle_file_types()  # refresh list if needed
+        self.toggle_file_types()
 
-        # ---------------- File List Selection Frame ----------------
+        # File List Selection Frame
         self.file_list_frame = ttk.LabelFrame(self.container, text="Select Files to Move", padding="10")
         self.file_list_frame.grid(row=2, column=0, sticky="nsew", pady=5)
         self.container.rowconfigure(2, weight=1)
@@ -218,7 +278,7 @@ class FamilyFileMover(tk.Tk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=2, column=0, sticky="e", padx=5, pady=5)
 
-        # ---------------- Transfer Controls Frame ----------------
+        # Transfer Controls Frame
         self.transfer_frame = ttk.Frame(self.container, padding="10")
         self.transfer_frame.grid(row=3, column=0, sticky="ew", pady=5)
         self.transfer_frame.columnconfigure(1, weight=1)
@@ -228,7 +288,7 @@ class FamilyFileMover(tk.Tk):
         self.progress = ttk.Progressbar(self.transfer_frame, orient="horizontal", mode="determinate", length=300)
         self.progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-        # ---------------- Error Log Frame ----------------
+        # Error Log Frame
         self.error_log_frame = ttk.LabelFrame(self.container, text="Error Log", padding="10")
         self.error_log_frame.grid(row=4, column=0, sticky="ew", pady=5)
         self.error_log = scrolledtext.ScrolledText(self.error_log_frame, height=5, state="disabled", wrap="word")
@@ -369,7 +429,6 @@ class FamilyFileMover(tk.Tk):
         self.progress['value'] = 0
         for i, file in enumerate(selected_files):
             src_path = os.path.join(source, file)
-            # Try to get "date taken" from EXIF metadata.
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
@@ -378,7 +437,7 @@ class FamilyFileMover(tk.Tk):
                 except Exception:
                     dt = datetime.now()
             year = dt.strftime("%Y")
-            month = dt.strftime("%B")  # Full month name
+            month = dt.strftime("%B")
             day = dt.strftime("%d")
             target_dir = os.path.join(dest, base_folder, year, month, day)
             if not os.path.exists(target_dir):
