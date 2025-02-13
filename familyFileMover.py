@@ -73,24 +73,21 @@ def get_date_taken(file_path):
         if ext == ".docx":
             try:
                 with zipfile.ZipFile(file_path, "r") as z:
-                    try:
-                        core_xml = z.read("docProps/core.xml")
-                    except KeyError:
-                        sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': docProps/core.xml not found\n")
-                        return None
+                    core_xml = z.read("docProps/core.xml")
                 root = ET.fromstring(core_xml)
                 ns = {"dcterms": "http://purl.org/dc/terms/"}
                 created_elem = root.find("dcterms:created", ns)
                 if created_elem is not None and created_elem.text:
                     date_str = created_elem.text.strip()
-                    # DOCX dates are typically in ISO format like "2025-01-29T12:34:56Z"
                     if date_str.endswith("Z"):
                         date_str = date_str[:-1]
                     try:
                         return datetime.fromisoformat(date_str)
-                    except Exception as e:
-                        sys.stderr.write(f"Error parsing docx date for file '{file_path}': {e}\n")
-                        return None
+                    except Exception:
+                        return datetime.fromisoformat(date_str.rstrip("Z"))
+            except KeyError as e:
+                sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
+                return None
             except Exception as e:
                 sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
                 return None
@@ -106,7 +103,6 @@ def get_date_taken(file_path):
                 media_info = MediaInfo.parse(file_path)
                 for track in media_info.tracks:
                     if track.track_type == "General":
-                        # Try to obtain a video date from various fields.
                         date_str = track.tagged_date or track.encoded_date or getattr(track, "media_created", None) or getattr(track, "file_created_date", None)
                         if date_str:
                             if date_str.endswith("UTC"):
@@ -183,17 +179,11 @@ class ScrollableFrame(ttk.Frame):
         self.canvas = tk.Canvas(self, height=height, borderwidth=0)
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
-
         self.inner_frame = ttk.Frame(self.canvas)
-        self.inner_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        self.inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw")
-
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
@@ -204,105 +194,87 @@ class FamilyFileMover(tk.Tk):
         self.resizable(False, False)
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
-
         self.settings = load_settings()
         self.file_check_vars = {}
         self.select_all_var = tk.BooleanVar(value=False)
-
         self.container = ttk.Frame(self, padding="10")
         self.container.grid(row=0, column=0, sticky="nsew")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-
         # Folder Settings Frame
         self.folder_frame = ttk.LabelFrame(self.container, text="Folder Settings", padding="10")
         self.folder_frame.grid(row=0, column=0, sticky="ew", pady=5)
         self.folder_frame.columnconfigure(1, weight=1)
-
         ttk.Label(self.folder_frame, text="Source Folder:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.source_entry = ttk.Entry(self.folder_frame, width=50)
         self.source_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
         ttk.Button(self.folder_frame, text="Browse", command=self.browse_source).grid(row=0, column=2, padx=5, pady=5)
-
         ttk.Label(self.folder_frame, text="Destination Folder:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.dest_entry = ttk.Entry(self.folder_frame, width=50)
         self.dest_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=5)
         ttk.Button(self.folder_frame, text="Browse", command=self.browse_dest).grid(row=1, column=2, padx=5, pady=5)
-
         ttk.Label(self.folder_frame, text="Base Folder (subfolder):").grid(row=2, column=0, sticky="w", padx=5, pady=5)
         self.base_entry = ttk.Entry(self.folder_frame, width=50)
         self.base_entry.grid(row=2, column=1, sticky="ew", padx=5, pady=5)
-
         # File Type Selection Frame
         self.file_types_frame = ttk.LabelFrame(self.container, text="File Type Selection", padding="10")
         self.file_types_frame.grid(row=1, column=0, sticky="ew", pady=5)
         self.file_types_frame.columnconfigure(0, weight=1)
-
         self.all_files_var = tk.BooleanVar(value=True)
         self.images_var = tk.BooleanVar(value=False)
         self.videos_var = tk.BooleanVar(value=False)
         self.documents_var = tk.BooleanVar(value=False)
         self.music_var = tk.BooleanVar(value=False)
-
-        self.all_files_cb = ttk.Checkbutton(self.file_types_frame, text="All Files",
-                                            variable=self.all_files_var, command=self.toggle_file_types)
+        self.all_files_cb = ttk.Checkbutton(self.file_types_frame, text="All Files", variable=self.all_files_var, command=self.toggle_file_types)
         self.all_files_cb.grid(row=0, column=0, padx=5, pady=5)
-        self.images_cb = ttk.Checkbutton(self.file_types_frame, text="Images",
-                                         variable=self.images_var, command=self.refresh_file_list)
+        self.images_cb = ttk.Checkbutton(self.file_types_frame, text="Images", variable=self.images_var, command=self.refresh_file_list)
         self.images_cb.grid(row=0, column=1, padx=5, pady=5)
-        self.videos_cb = ttk.Checkbutton(self.file_types_frame, text="Videos",
-                                         variable=self.videos_var, command=self.refresh_file_list)
+        self.videos_cb = ttk.Checkbutton(self.file_types_frame, text="Videos", variable=self.videos_var, command=self.refresh_file_list)
         self.videos_cb.grid(row=0, column=2, padx=5, pady=5)
-        self.documents_cb = ttk.Checkbutton(self.file_types_frame, text="Documents",
-                                            variable=self.documents_var, command=self.refresh_file_list)
+        self.documents_cb = ttk.Checkbutton(self.file_types_frame, text="Documents", variable=self.documents_var, command=self.refresh_file_list)
         self.documents_cb.grid(row=0, column=3, padx=5, pady=5)
-        self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music",
-                                        variable=self.music_var, command=self.refresh_file_list)
+        self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music", variable=self.music_var, command=self.refresh_file_list)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
         self.toggle_file_types()
-
         # File List Selection Frame
         self.file_list_frame = ttk.LabelFrame(self.container, text="Select Files to Move", padding="10")
         self.file_list_frame.grid(row=2, column=0, sticky="nsew", pady=5)
         self.container.rowconfigure(2, weight=1)
-
-        self.select_all_cb = ttk.Checkbutton(self.file_list_frame, text="Select All",
-                                             variable=self.select_all_var, command=self.toggle_select_all)
+        self.select_all_cb = ttk.Checkbutton(self.file_list_frame, text="Select All", variable=self.select_all_var, command=self.toggle_select_all)
         self.select_all_cb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-
+        # New: Selection count label
+        self.selection_count_label = ttk.Label(self.file_list_frame, text="Selected: 0 / 0")
+        self.selection_count_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
-        self.scrollable_file_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        self.scrollable_file_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
         self.file_list_frame.rowconfigure(1, weight=1)
         self.file_list_frame.columnconfigure(0, weight=1)
-
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
-        self.refresh_button.grid(row=2, column=0, sticky="e", padx=5, pady=5)
-
+        self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
         # Transfer Controls Frame
         self.transfer_frame = ttk.Frame(self.container, padding="10")
         self.transfer_frame.grid(row=3, column=0, sticky="ew", pady=5)
         self.transfer_frame.columnconfigure(1, weight=1)
-
         self.transfer_button = ttk.Button(self.transfer_frame, text="Transfer Files", command=self.transfer_files)
         self.transfer_button.grid(row=0, column=0, padx=5, pady=5)
         self.progress = ttk.Progressbar(self.transfer_frame, orient="horizontal", mode="determinate", length=300)
         self.progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-
         # Error Log Frame
         self.error_log_frame = ttk.LabelFrame(self.container, text="Error Log", padding="10")
         self.error_log_frame.grid(row=4, column=0, sticky="ew", pady=5)
         self.error_log = scrolledtext.ScrolledText(self.error_log_frame, height=5, state="disabled", wrap="word")
         self.error_log.pack(fill="both", expand=True, padx=5, pady=5)
-
         self.populate_fields()
         self.refresh_file_list()
-
-        # Redirect sys.stderr to our error log widget.
         sys.stderr = ErrorLogger(self.error_log)
-
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.update_idletasks()
         self.geometry("")
+
+    def update_selection_count(self):
+        total = len(self.file_check_vars)
+        selected = sum(var.get() for var in self.file_check_vars.values())
+        self.selection_count_label.config(text=f"Selected: {selected} / {total}")
 
     def log_error(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -368,6 +340,7 @@ class FamilyFileMover(tk.Tk):
         new_value = self.select_all_var.get()
         for var in self.file_check_vars.values():
             var.set(new_value)
+        self.update_selection_count()
 
     def refresh_file_list(self):
         for widget in self.scrollable_file_frame.inner_frame.winfo_children():
@@ -375,6 +348,7 @@ class FamilyFileMover(tk.Tk):
         self.file_check_vars = {}
         source_dir = self.source_entry.get().strip()
         if not source_dir or not os.path.isdir(source_dir):
+            self.update_selection_count()
             return
         allowed_extensions = None
         if not self.all_files_var.get():
@@ -396,11 +370,15 @@ class FamilyFileMover(tk.Tk):
                     if ext.lower() not in allowed_extensions:
                         continue
                 var = tk.BooleanVar(value=self.select_all_var.get())
+                # Add a trace to update selection count on change.
+                var.trace_add("write", lambda *args: self.update_selection_count())
                 chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=file, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
                 self.file_check_vars[file] = var
+            self.update_selection_count()
         except Exception as e:
             self.show_and_log_error("Error", f"Error reading source directory:\n{e}")
+            self.update_selection_count()
 
     def get_unique_filename(self, directory, filename):
         base, ext = os.path.splitext(filename)
