@@ -44,7 +44,7 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
-# Redirect stderr output to a widget.
+# Redirect stderr to a widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -98,9 +98,13 @@ def get_date_taken(file_path):
                             if date_str.endswith("UTC"):
                                 date_str = date_str[:-3].strip()
                             try:
-                                return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                                return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                             except Exception as e:
-                                sys.stderr.write(f"Error parsing video date for '{file_path}': {e}\n")
+                                try:
+                                    # Fallback: try dash-separated format
+                                    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                                except Exception as e2:
+                                    sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
             except Exception as e:
                 sys.stderr.write(f"Error extracting video metadata from '{file_path}': {e}\n")
         return None
@@ -129,7 +133,7 @@ def get_date_taken(file_path):
                 date_tag = tags.get("EXIF DateTimeOriginal")
                 if date_tag:
                     date_str = str(date_tag)
-                    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
         except Exception as e:
             sys.stderr.write(f"Error reading '{file_path}' with exifread: {e}\n")
     if Image is not None:
@@ -149,7 +153,7 @@ def get_date_taken(file_path):
                             date_str = value
                             break
                 if date_str:
-                    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
         except Exception as e:
             sys.stderr.write(f"Error extracting EXIF with Pillow for '{file_path}': {e}\n")
     return None
@@ -191,6 +195,7 @@ class FamilyFileMover(ThemedTk):
         self.style.configure("TButton", font=("Segoe UI", 10), padding=5)
         self.style.configure("TLabel", font=("Segoe UI", 10))
 
+        # Create Notebook with Main and Logs tabs.
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
         self.main_tab = ttk.Frame(self.notebook)
@@ -282,7 +287,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
 
-        # Operations: Transfer Files button, Cancel Transfer button, and progress bar at bottom.
+        # Operations: Transfer Files button, Cancel Transfer button, progress bar, and progress percentage.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
@@ -294,8 +299,9 @@ class FamilyFileMover(ThemedTk):
         self.cancel_button.config(state="disabled")
         self.progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.progress.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        self.progress_label = ttk.Label(self.operations_frame, text="0%")
+        self.progress_label.grid(row=1, column=2, padx=5, pady=5, sticky="e")
 
-        # Allow file list area to expand.
         self.main_tab.rowconfigure(3, weight=1)
 
     def setup_log_tab(self):
@@ -424,6 +430,10 @@ class FamilyFileMover(ThemedTk):
 
     # --- Threaded transfer with cancellation ---
     def start_transfer(self):
+        selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
+        if not selected_files:
+            messagebox.showinfo("No Files Selected", "Please select at least one file to transfer.")
+            return
         self.cancel_transfer = False
         self.transfer_button.config(state="disabled")
         self.cancel_button.config(state="normal")
@@ -438,6 +448,7 @@ class FamilyFileMover(ThemedTk):
         for i, file in enumerate(selected_files):
             if self.cancel_transfer:
                 self.after(0, lambda: self.progress.config(value=0))
+                self.after(0, lambda: self.progress_label.config(text="0%"))
                 self.after(0, lambda: messagebox.showinfo("Cancelled", "Transfer cancelled by user."))
                 break
             src_path = os.path.join(source, file)
@@ -465,10 +476,12 @@ class FamilyFileMover(ThemedTk):
                 continue
             progress_value = ((i + 1) / total_files) * 100
             self.after(0, lambda value=progress_value: self.progress.config(value=value))
+            self.after(0, lambda value=progress_value: self.progress_label.config(text=f"{int(value)}%"))
             self.after(0, self.update_idletasks)
         self.after(0, lambda: self.transfer_button.config(state="normal"))
         self.after(0, lambda: self.cancel_button.config(state="disabled"))
         self.after(0, lambda: self.progress.config(value=0))
+        self.after(0, lambda: self.progress_label.config(text="0%"))
         self.after(0, self.refresh_file_list)
 
     def cancel_transfer_func(self):
@@ -517,10 +530,13 @@ class FamilyFileMover(ThemedTk):
                         im.save(dest_path, out_format)
                 except Exception as e:
                     self.show_and_log_error("Error", f"Failed to convert '{file}': {e}")
-            self.progress['value'] = ((i + 1) / total_files) * 100
+            progress_value = ((i + 1) / total_files) * 100
+            self.progress['value'] = progress_value
+            self.progress_label.config(text=f"{int(progress_value)}%")
             self.update_idletasks()
         messagebox.showinfo("Info", "Conversion complete!")
         self.progress['value'] = 0
+        self.progress_label.config(text="0%")
         self.refresh_file_list()
         self.convert_input.set("None")
         self.convert_output.set("None")
