@@ -67,7 +67,7 @@ class ErrorLogger:
 # Helper function to get the "date taken" from metadata.
 def get_date_taken(file_path):
     ext = os.path.splitext(file_path)[1].lower()
-    # For document files:
+    # For document files, try to extract from DOCX core properties.
     document_extensions = {".doc", ".docx", ".txt"}
     if ext in document_extensions:
         if ext == ".docx":
@@ -79,7 +79,6 @@ def get_date_taken(file_path):
                 created_elem = root.find("dcterms:created", ns)
                 if created_elem is not None and created_elem.text:
                     date_str = created_elem.text.strip()
-                    # DOCX dates are typically ISO formatted (e.g. "2025-01-29T12:34:56Z")
                     if date_str.endswith("Z"):
                         date_str = date_str[:-1]
                     try:
@@ -90,6 +89,7 @@ def get_date_taken(file_path):
                 sys.stderr.write(f"Error extracting docx metadata from file '{file_path}': {e}\n")
                 return None
         else:
+            # For .doc and .txt, assume no embedded metadata.
             return None
 
     # For video files:
@@ -232,10 +232,9 @@ class FamilyFileMover(tk.Tk):
         self.music_cb = ttk.Checkbutton(self.file_types_frame, text="Music", variable=self.music_var, command=self.refresh_file_list)
         self.music_cb.grid(row=0, column=4, padx=5, pady=5)
         self.toggle_file_types()
-        # Conversion Settings Frame (New)
+        # Conversion Settings Frame
         self.conversion_frame = ttk.LabelFrame(self.container, text="Conversion Settings", padding="10")
         self.conversion_frame.grid(row=2, column=0, sticky="ew", pady=5)
-        # Two comboboxes: one for input format and one for output format.
         ttk.Label(self.conversion_frame, text="Convert Input Format:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.convert_input = tk.StringVar(value="None")
         self.input_combo = ttk.Combobox(self.conversion_frame, textvariable=self.convert_input, state="readonly",
@@ -246,6 +245,12 @@ class FamilyFileMover(tk.Tk):
         self.output_combo = ttk.Combobox(self.conversion_frame, textvariable=self.convert_output, state="readonly",
                                          values=["None", "jpg", "png", "gif", "bmp"])
         self.output_combo.grid(row=0, column=3, padx=5, pady=5)
+        ttk.Label(self.conversion_frame, text="JPEG Quality:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.jpeg_quality = tk.IntVar(value=85)
+        self.jpeg_quality_spinbox = tk.Spinbox(self.conversion_frame, from_=10, to=100, increment=5, textvariable=self.jpeg_quality, width=5)
+        self.jpeg_quality_spinbox.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        self.convert_button = ttk.Button(self.conversion_frame, text="Convert", command=self.convert_files)
+        self.convert_button.grid(row=1, column=3, padx=5, pady=5)
         # File List Selection Frame
         self.file_list_frame = ttk.LabelFrame(self.container, text="Select Files to Move", padding="10")
         self.file_list_frame.grid(row=3, column=0, sticky="nsew", pady=5)
@@ -432,37 +437,63 @@ class FamilyFileMover(tk.Tk):
                 except Exception as e:
                     self.show_and_log_error("Error", f"Failed to create directory {target_dir} for file '{file}':\n{e}")
                     continue
-            # Check if conversion is enabled.
-            conv_in = self.convert_input.get().lower()
-            conv_out = self.convert_output.get().lower()
-            file_ext = os.path.splitext(file)[1].lower()
-            converted = False
-            if conv_in != "none" and conv_out != "none" and file_ext == "." + conv_in:
-                try:
-                    im = Image.open(src_path)
-                    format_mapping = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "gif": "GIF", "bmp": "BMP"}
-                    out_format = format_mapping.get(conv_out, conv_out.upper())
-                    # Build a new file name with the new extension.
-                    new_file = os.path.splitext(file)[0] + "." + conv_out
-                    dest_path = os.path.join(target_dir, new_file)
-                    im.convert("RGB").save(dest_path, out_format)
-                    os.remove(src_path)
-                    converted = True
-                except Exception as e:
-                    self.show_and_log_error("Error", f"Failed to convert file '{file}': {e}")
-            if not converted:
-                new_file = self.get_unique_filename(target_dir, file)
-                dest_path = os.path.join(target_dir, new_file)
-                try:
-                    shutil.move(src_path, dest_path)
-                except Exception as e:
-                    self.show_and_log_error("Error", f"Failed to move file '{file}': {e}")
-                    continue
+            new_file = self.get_unique_filename(target_dir, file)
+            dest_path = os.path.join(target_dir, new_file)
+            try:
+                shutil.move(src_path, dest_path)
+            except Exception as e:
+                self.show_and_log_error("Error", f"Failed to move file '{file}': {e}")
+                continue
             self.progress['value'] = ((i + 1) / total_files) * 100
             self.update_idletasks()
         messagebox.showinfo("Info", "File transfer complete!")
         self.progress['value'] = 0
         self.refresh_file_list()
+
+    def convert_files(self):
+        # Conversion-only: process selected files matching conversion input format.
+        conv_in = self.convert_input.get().lower()
+        conv_out = self.convert_output.get().lower()
+        if conv_in == "none" or conv_out == "none":
+            messagebox.showinfo("Conversion", "Conversion not enabled. Please select both input and output formats.")
+            return
+        source = self.source_entry.get().strip()
+        if not source or not os.path.isdir(source):
+            self.show_and_log_error("Error", "Please select a valid source folder.")
+            return
+        selected_files = [file for file, var in self.file_check_vars.items() if var.get()]
+        if not selected_files:
+            messagebox.showinfo("Info", "No files selected for conversion.")
+            return
+        total_files = len(selected_files)
+        self.progress['value'] = 0
+        for i, file in enumerate(selected_files):
+            src_path = os.path.join(source, file)
+            file_ext = os.path.splitext(file)[1].lower()
+            if file_ext == "." + conv_in:
+                try:
+                    im = Image.open(src_path)
+                    format_mapping = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "gif": "GIF", "bmp": "BMP"}
+                    out_format = format_mapping.get(conv_out, conv_out.upper())
+                    new_file = os.path.splitext(file)[0] + "." + conv_out
+                    # Save converted file in the same directory as the original.
+                    target_dir = os.path.dirname(src_path)
+                    dest_path = os.path.join(target_dir, new_file)
+                    if out_format in ("JPEG", "JPG"):
+                        im.convert("RGB").save(dest_path, out_format, quality=self.jpeg_quality.get())
+                    else:
+                        im.save(dest_path, out_format)
+                except Exception as e:
+                    self.show_and_log_error("Error", f"Failed to convert file '{file}': {e}")
+            self.progress['value'] = ((i + 1) / total_files) * 100
+            self.update_idletasks()
+        messagebox.showinfo("Info", "Conversion complete!")
+        self.progress['value'] = 0
+        self.refresh_file_list()
+        # Reset conversion settings to default.
+        self.convert_input.set("None")
+        self.convert_output.set("None")
+        self.jpeg_quality.set(85)
 
     def on_close(self):
         self.settings["source_folder"] = self.source_entry.get().strip()
