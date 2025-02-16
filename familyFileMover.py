@@ -1,4 +1,5 @@
 from ttkthemes import ThemedTk
+import threading
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import tkinter as tk
 import os, sys, json, shutil
@@ -43,7 +44,7 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
-# Redirect stderr to our error log widget.
+# Redirect stderr output to a widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -128,7 +129,7 @@ def get_date_taken(file_path):
                 date_tag = tags.get("EXIF DateTimeOriginal")
                 if date_tag:
                     date_str = str(date_tag)
-                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
         except Exception as e:
             sys.stderr.write(f"Error reading '{file_path}' with exifread: {e}\n")
     if Image is not None:
@@ -154,7 +155,7 @@ def get_date_taken(file_path):
     return None
 
 
-# ScrollableFrame whose inner frame width always equals the container width.
+# A ScrollableFrame whose inner frame width always matches the container.
 class ScrollableFrame(ttk.Frame):
     def __init__(self, parent, height=300, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
@@ -176,22 +177,20 @@ class FamilyFileMover(ThemedTk):
     def __init__(self):
         super().__init__(theme="arc")
         self.title("Family File Mover")
-        # self.geometry("900x700")
         self.geometry("600x700")
-
         self.resizable(False, False)
 
         # Initialize variables.
         self.settings = load_settings()
         self.file_check_vars = {}
         self.select_all_var = tk.BooleanVar(value=False)
+        self.cancel_transfer = False  # For cancelling transfers
 
         self.style = ttk.Style(self)
         self.style.configure("TLabelFrame", font=("Segoe UI", 11, "bold"), padding=10)
         self.style.configure("TButton", font=("Segoe UI", 10), padding=5)
         self.style.configure("TLabel", font=("Segoe UI", 10))
 
-        # Create Notebook with Main and Logs tabs.
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
         self.main_tab = ttk.Frame(self.notebook)
@@ -283,16 +282,20 @@ class FamilyFileMover(ThemedTk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
 
-        # Operations: Transfer Files button and progress bar at bottom.
+        # Operations: Transfer Files button, Cancel Transfer button, and progress bar at bottom.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
-        self.transfer_button = ttk.Button(self.operations_frame, text="Transfer Files", command=self.transfer_files)
+        self.transfer_button = ttk.Button(self.operations_frame, text="Transfer Files", command=self.start_transfer)
         self.transfer_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.cancel_button = ttk.Button(self.operations_frame, text="Cancel Transfer",
+                                        command=self.cancel_transfer_func)
+        self.cancel_button.grid(row=0, column=1, padx=5, pady=5, sticky="e")
+        self.cancel_button.config(state="disabled")
         self.progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
-        self.progress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.progress.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
 
-        # Ensure the file list expands.
+        # Allow file list area to expand.
         self.main_tab.rowconfigure(3, weight=1)
 
     def setup_log_tab(self):
@@ -419,26 +422,24 @@ class FamilyFileMover(ThemedTk):
             counter += 1
         return candidate
 
-    def transfer_files(self):
-        self.error_log.configure(state="normal")
-        self.error_log.delete("1.0", tk.END)
-        self.error_log.configure(state="disabled")
+    # --- Threaded transfer with cancellation ---
+    def start_transfer(self):
+        self.cancel_transfer = False
+        self.transfer_button.config(state="disabled")
+        self.cancel_button.config(state="normal")
+        threading.Thread(target=self.transfer_files_thread, daemon=True).start()
+
+    def transfer_files_thread(self):
         source = self.source_entry.get().strip()
         dest = self.dest_entry.get().strip()
         base_folder = self.base_entry.get().strip() or "FamilyMedia"
-        if not source or not os.path.isdir(source):
-            self.show_and_log_error("Error", "Please select a valid source folder.")
-            return
-        if not dest or not os.path.isdir(dest):
-            self.show_and_log_error("Error", "Please select a valid destination folder.")
-            return
         selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
-        if not selected_files:
-            messagebox.showinfo("Info", "No files selected for transfer.")
-            return
         total_files = len(selected_files)
-        self.progress['value'] = 0
         for i, file in enumerate(selected_files):
+            if self.cancel_transfer:
+                self.after(0, lambda: self.progress.config(value=0))
+                self.after(0, lambda: messagebox.showinfo("Cancelled", "Transfer cancelled by user."))
+                break
             src_path = os.path.join(source, file)
             dt = get_date_taken(src_path)
             if dt is None:
@@ -452,20 +453,33 @@ class FamilyFileMover(ThemedTk):
                 try:
                     os.makedirs(target_dir)
                 except Exception as e:
-                    self.show_and_log_error("Error", f"Failed to create directory {target_dir} for '{file}':\n{e}")
+                    self.after(0, lambda e=e, file=file: self.show_and_log_error("Error",
+                                                                                 f"Failed to create directory {target_dir} for '{file}':\n{e}"))
                     continue
             new_file = self.get_unique_filename(target_dir, file)
             dest_path = os.path.join(target_dir, new_file)
             try:
                 shutil.move(src_path, dest_path)
             except Exception as e:
-                self.show_and_log_error("Error", f"Failed to move '{file}': {e}")
+                self.after(0, lambda e=e, file=file: self.show_and_log_error("Error", f"Failed to move '{file}': {e}"))
                 continue
-            self.progress['value'] = ((i + 1) / total_files) * 100
-            self.update_idletasks()
-        messagebox.showinfo("Info", "File transfer complete!")
-        self.progress['value'] = 0
+            progress_value = ((i + 1) / total_files) * 100
+            self.after(0, lambda value=progress_value: self.progress.config(value=value))
+            self.after(0, self.update_idletasks)
+        self.after(0, lambda: self.transfer_button.config(state="normal"))
+        self.after(0, lambda: self.cancel_button.config(state="disabled"))
+        self.after(0, lambda: self.progress.config(value=0))
+        self.after(0, self.refresh_file_list)
+
+    def cancel_transfer_func(self):
+        response = messagebox.askyesno("Cancel Transfer", "Are you sure you want to stop transferring?")
+        if response:
+            self.cancel_transfer = True
         self.refresh_file_list()
+
+    # Use start_transfer() for threaded operation.
+    def transfer_files(self):
+        pass
 
     def convert_files(self):
         self.error_log.configure(state="normal")
