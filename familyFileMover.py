@@ -44,7 +44,7 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
-# Redirect stderr to a widget.
+# Redirect stderr output to a widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -87,6 +87,13 @@ def get_date_taken(file_path):
             return None
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
+        # First, try to use the file's modified time.
+        try:
+            mod_time = os.path.getmtime(file_path)
+            return datetime.fromtimestamp(mod_time)
+        except Exception:
+            pass
+        # Next, try to extract metadata via MediaInfo.
         if MediaInfo is not None:
             try:
                 media_info = MediaInfo.parse(file_path)
@@ -98,16 +105,18 @@ def get_date_taken(file_path):
                             if date_str.endswith("UTC"):
                                 date_str = date_str[:-3].strip()
                             try:
-                                return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                                # Try dash-separated format first.
+                                return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
                             except Exception as e:
                                 try:
-                                    # Fallback: try dash-separated format
-                                    return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                                    # Fallback: try colon-separated format.
+                                    return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                                 except Exception as e2:
                                     sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
             except Exception as e:
                 sys.stderr.write(f"Error extracting video metadata from '{file_path}': {e}\n")
-        return None
+        # Fallback: if no metadata found, use the current date.
+        return datetime.now()
     if file_path.lower().endswith('.heic'):
         if Image is not None:
             try:
@@ -455,7 +464,8 @@ class FamilyFileMover(ThemedTk):
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
-                    dt = datetime.fromtimestamp(os.path.getctime(src_path))
+                    # For videos and images fallback, use modification time.
+                    dt = datetime.fromtimestamp(os.path.getmtime(src_path))
                 except Exception:
                     dt = datetime.now()
             year, month, day = dt.strftime("%Y"), dt.strftime("%B"), dt.strftime("%d")
@@ -490,8 +500,8 @@ class FamilyFileMover(ThemedTk):
             self.cancel_transfer = True
         self.refresh_file_list()
 
-    # Use start_transfer() for threaded operation.
     def transfer_files(self):
+        # Not used; start_transfer() is the threaded operation.
         pass
 
     def convert_files(self):
