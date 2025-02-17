@@ -3,7 +3,7 @@ import threading
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import tkinter as tk
 import os, sys, json, shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 import zipfile, xml.etree.ElementTree as ET
 
 # Optional libraries
@@ -87,7 +87,7 @@ def get_date_taken(file_path):
             return None
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
-        # First, try to use the file's modified time.
+        # For video files, first try to use the file's modified time.
         try:
             mod_time = os.path.getmtime(file_path)
             return datetime.fromtimestamp(mod_time)
@@ -105,11 +105,9 @@ def get_date_taken(file_path):
                             if date_str.endswith("UTC"):
                                 date_str = date_str[:-3].strip()
                             try:
-                                # Try dash-separated format first.
                                 return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
                             except Exception as e:
                                 try:
-                                    # Fallback: try colon-separated format.
                                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                                 except Exception as e2:
                                     sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
@@ -296,7 +294,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
 
-        # Operations: Transfer Files button, Cancel Transfer button, progress bar, and progress percentage.
+        # Operations: Transfer Files button, Cancel Transfer button, progress bar, progress percentage, and estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
@@ -310,6 +308,9 @@ class FamilyFileMover(ThemedTk):
         self.progress.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         self.progress_label = ttk.Label(self.operations_frame, text="0%")
         self.progress_label.grid(row=1, column=2, padx=5, pady=5, sticky="e")
+        # New estimated time label.
+        self.estimated_label = ttk.Label(self.operations_frame, text="Estimated time remaining: --:--:--")
+        self.estimated_label.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="w")
 
         self.main_tab.rowconfigure(3, weight=1)
 
@@ -437,7 +438,7 @@ class FamilyFileMover(ThemedTk):
             counter += 1
         return candidate
 
-    # --- Threaded transfer with cancellation ---
+    # --- Threaded transfer with cancellation and estimated time ---
     def start_transfer(self):
         selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
         if not selected_files:
@@ -446,6 +447,8 @@ class FamilyFileMover(ThemedTk):
         self.cancel_transfer = False
         self.transfer_button.config(state="disabled")
         self.cancel_button.config(state="normal")
+        # Record the start time for estimating remaining time.
+        self.transfer_start_time = datetime.now()
         threading.Thread(target=self.transfer_files_thread, daemon=True).start()
 
     def transfer_files_thread(self):
@@ -458,13 +461,13 @@ class FamilyFileMover(ThemedTk):
             if self.cancel_transfer:
                 self.after(0, lambda: self.progress.config(value=0))
                 self.after(0, lambda: self.progress_label.config(text="0%"))
+                self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
                 self.after(0, lambda: messagebox.showinfo("Cancelled", "Transfer cancelled by user."))
                 break
             src_path = os.path.join(source, file)
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
-                    # For videos and images fallback, use modification time.
                     dt = datetime.fromtimestamp(os.path.getmtime(src_path))
                 except Exception:
                     dt = datetime.now()
@@ -487,11 +490,19 @@ class FamilyFileMover(ThemedTk):
             progress_value = ((i + 1) / total_files) * 100
             self.after(0, lambda value=progress_value: self.progress.config(value=value))
             self.after(0, lambda value=progress_value: self.progress_label.config(text=f"{int(value)}%"))
+            # Calculate estimated time remaining.
+            elapsed = datetime.now() - self.transfer_start_time
+            avg = elapsed / (i + 1)
+            remaining = avg * (total_files - (i + 1))
+            # Format remaining time as HH:MM:SS.
+            remaining_str = str(remaining).split('.')[0]
+            self.after(0, lambda rs=remaining_str: self.estimated_label.config(text=f"Estimated time remaining: {rs}"))
             self.after(0, self.update_idletasks)
         self.after(0, lambda: self.transfer_button.config(state="normal"))
         self.after(0, lambda: self.cancel_button.config(state="disabled"))
         self.after(0, lambda: self.progress.config(value=0))
         self.after(0, lambda: self.progress_label.config(text="0%"))
+        self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
         self.after(0, self.refresh_file_list)
 
     def cancel_transfer_func(self):
@@ -500,8 +511,8 @@ class FamilyFileMover(ThemedTk):
             self.cancel_transfer = True
         self.refresh_file_list()
 
+    # Use start_transfer() for threaded operation.
     def transfer_files(self):
-        # Not used; start_transfer() is the threaded operation.
         pass
 
     def convert_files(self):
