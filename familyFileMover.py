@@ -87,7 +87,7 @@ def get_date_taken(file_path):
             return None
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
-        # For video files, first try to use the file's modified time.
+        # First, try to use the file's modified time.
         try:
             mod_time = os.path.getmtime(file_path)
             return datetime.fromtimestamp(mod_time)
@@ -105,9 +105,11 @@ def get_date_taken(file_path):
                             if date_str.endswith("UTC"):
                                 date_str = date_str[:-3].strip()
                             try:
+                                # Try dash-separated format first.
                                 return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
                             except Exception as e:
                                 try:
+                                    # Fallback: try colon-separated format.
                                     return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                                 except Exception as e2:
                                     sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
@@ -289,10 +291,16 @@ class FamilyFileMover(ThemedTk):
         self.select_all_cb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.selection_count_label = ttk.Label(self.file_list_frame, text="Selected: 0 / 0")
         self.selection_count_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        # New: Entry field for number of files to select and a "Select Next" button.
+        self.select_next_entry = ttk.Entry(self.file_list_frame, width=5)
+        self.select_next_entry.grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.select_next_button = ttk.Button(self.file_list_frame, text="Select Next", command=self.select_next_files)
+        self.select_next_button.grid(row=0, column=3, sticky="w", padx=5, pady=5)
+
         self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
-        self.scrollable_file_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        self.scrollable_file_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
-        self.refresh_button.grid(row=2, column=0, columnspan=2, sticky="e", padx=5, pady=5)
+        self.refresh_button.grid(row=2, column=0, columnspan=4, sticky="e", padx=5, pady=5)
 
         # Operations: Transfer Files button, Cancel Transfer button, progress bar, progress percentage, and estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
@@ -308,7 +316,6 @@ class FamilyFileMover(ThemedTk):
         self.progress.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         self.progress_label = ttk.Label(self.operations_frame, text="0%")
         self.progress_label.grid(row=1, column=2, padx=5, pady=5, sticky="e")
-        # New estimated time label.
         self.estimated_label = ttk.Label(self.operations_frame, text="Estimated time remaining: --:--:--")
         self.estimated_label.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="w")
 
@@ -425,6 +432,8 @@ class FamilyFileMover(ThemedTk):
                 chk.pack(anchor="w", padx=5, pady=2)
                 self.file_check_vars[file] = var
             self.update_selection_count()
+            # Reset the scroll to the top.
+            self.scrollable_file_frame.canvas.yview_moveto(0)
         except Exception as e:
             self.show_and_log_error("Error", f"Error reading source directory:\n{e}")
             self.update_selection_count()
@@ -438,6 +447,23 @@ class FamilyFileMover(ThemedTk):
             counter += 1
         return candidate
 
+    # --- Method to automatically select next N unselected files ---
+    def select_next_files(self):
+        try:
+            n = int(self.select_next_entry.get())
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number.")
+            return
+        count = 0
+        # Iterate in insertion order.
+        for file, var in self.file_check_vars.items():
+            if not var.get():
+                var.set(True)
+                count += 1
+                if count >= n:
+                    break
+        self.update_selection_count()
+
     # --- Threaded transfer with cancellation and estimated time ---
     def start_transfer(self):
         selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
@@ -447,8 +473,7 @@ class FamilyFileMover(ThemedTk):
         self.cancel_transfer = False
         self.transfer_button.config(state="disabled")
         self.cancel_button.config(state="normal")
-        # Record the start time for estimating remaining time.
-        self.transfer_start_time = datetime.now()
+        self.transfer_start_time = datetime.now()  # Record start time for estimation.
         threading.Thread(target=self.transfer_files_thread, daemon=True).start()
 
     def transfer_files_thread(self):
@@ -494,7 +519,6 @@ class FamilyFileMover(ThemedTk):
             elapsed = datetime.now() - self.transfer_start_time
             avg = elapsed / (i + 1)
             remaining = avg * (total_files - (i + 1))
-            # Format remaining time as HH:MM:SS.
             remaining_str = str(remaining).split('.')[0]
             self.after(0, lambda rs=remaining_str: self.estimated_label.config(text=f"Estimated time remaining: {rs}"))
             self.after(0, self.update_idletasks)
@@ -504,6 +528,8 @@ class FamilyFileMover(ThemedTk):
         self.after(0, lambda: self.progress_label.config(text="0%"))
         self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
         self.after(0, self.refresh_file_list)
+        # Reset the file list scroll to the top.
+        self.after(0, lambda: self.scrollable_file_frame.canvas.yview_moveto(0))
 
     def cancel_transfer_func(self):
         response = messagebox.askyesno("Cancel Transfer", "Are you sure you want to stop transferring?")
@@ -511,9 +537,8 @@ class FamilyFileMover(ThemedTk):
             self.cancel_transfer = True
         self.refresh_file_list()
 
-    # Use start_transfer() for threaded operation.
     def transfer_files(self):
-        pass
+        pass  # Not used; start_transfer() is used.
 
     def convert_files(self):
         self.error_log.configure(state="normal")
