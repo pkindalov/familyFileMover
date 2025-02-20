@@ -87,11 +87,13 @@ def get_date_taken(file_path):
             return None
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
+        # First, try to use the file's modification time.
         try:
             mod_time = os.path.getmtime(file_path)
             return datetime.fromtimestamp(mod_time)
         except Exception:
             pass
+        # Next, try to extract metadata via MediaInfo.
         if MediaInfo is not None:
             try:
                 media_info = MediaInfo.parse(file_path)
@@ -111,6 +113,7 @@ def get_date_taken(file_path):
                                     sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
             except Exception as e:
                 sys.stderr.write(f"Error extracting video metadata from '{file_path}': {e}\n")
+        # Fallback: if no metadata found, use the current date.
         return datetime.now()
     if file_path.lower().endswith('.heic'):
         if Image is not None:
@@ -181,19 +184,23 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.itemconfig(self.inner_frame_id, width=event.width)
 
 
-# Function to copy file with per-file progress updates.
+# Custom copy function that copies in chunks, updates progress, and cleans up partial files if error occurs.
 def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024):
     total_size = os.path.getsize(src)
     copied = 0
-    with open(src, "rb") as fsrc, open(dest, "wb") as fdst:
-        while True:
-            chunk = fsrc.read(chunk_size)
-            if not chunk:
-                break
-            fdst.write(chunk)
-            copied += len(chunk)
-            progress_callback(copied / total_size * 100)
-    # After copying, remove source file.
+    try:
+        with open(src, "rb") as fsrc, open(dest, "wb") as fdst:
+            while True:
+                chunk = fsrc.read(chunk_size)
+                if not chunk:
+                    break
+                fdst.write(chunk)
+                copied += len(chunk)
+                progress_callback(copied / total_size * 100)
+    except Exception as e:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise e
     os.remove(src)
 
 
@@ -302,12 +309,10 @@ class FamilyFileMover(ThemedTk):
         self.select_all_cb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
         self.selection_count_label = ttk.Label(self.file_list_frame, text="Selected: 0 / 0")
         self.selection_count_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
-        # New: Entry field for number of files to select next, and a "Select Next" button.
         self.select_next_entry = ttk.Entry(self.file_list_frame, width=5)
         self.select_next_entry.grid(row=0, column=2, sticky="w", padx=5, pady=5)
         self.select_next_button = ttk.Button(self.file_list_frame, text="Select Next", command=self.select_next_files)
         self.select_next_button.grid(row=0, column=3, sticky="w", padx=5, pady=5)
-
         self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
         self.scrollable_file_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
@@ -323,12 +328,10 @@ class FamilyFileMover(ThemedTk):
                                         command=self.cancel_transfer_func)
         self.cancel_button.grid(row=0, column=1, padx=5, pady=5, sticky="e")
         self.cancel_button.config(state="disabled")
-        # Current file progress bar and label:
         self.current_file_label = ttk.Label(self.operations_frame, text="Current file: None")
         self.current_file_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.current_progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.current_progress.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        # Overall progress bar and label.
         self.progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.progress.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         self.progress_label = ttk.Label(self.operations_frame, text="0%")
@@ -479,22 +482,24 @@ class FamilyFileMover(ThemedTk):
                     break
         self.update_selection_count()
 
-    # --- Custom file copy with per-file progress ---
-    def copy_file_with_progress(self, src, dest):
+    # --- Custom file copy with per-file progress and error cleanup ---
+    def copy_file_with_progress(self, src, dest, progress_callback, chunk_size=1024 * 1024):
         total_size = os.path.getsize(src)
         copied = 0
-        chunk_size = 1024 * 1024  # 1MB
-        with open(src, "rb") as fsrc, open(dest, "wb") as fdst:
-            while True:
-                chunk = fsrc.read(chunk_size)
-                if not chunk:
-                    break
-                fdst.write(chunk)
-                copied += len(chunk)
-                percent = (copied / total_size) * 100
-                self.current_progress.config(value=percent)
-                self.update_idletasks()
-        os.remove(src)  # Remove source file after copying.
+        try:
+            with open(src, "rb") as fsrc, open(dest, "wb") as fdst:
+                while True:
+                    chunk = fsrc.read(chunk_size)
+                    if not chunk:
+                        break
+                    fdst.write(chunk)
+                    copied += len(chunk)
+                    progress_callback(copied / total_size * 100)
+        except Exception as e:
+            if os.path.exists(dest):
+                os.remove(dest)
+            raise e
+        os.remove(src)
 
     # --- Threaded transfer with cancellation, estimated time, and individual file progress ---
     def start_transfer(self):
@@ -525,6 +530,11 @@ class FamilyFileMover(ThemedTk):
                 break
             self.after(0, lambda f=file: self.current_file_label.config(text=f"Current file: {f}"))
             src_path = os.path.join(source, file)
+            # Check free space before copying:
+            file_size = os.path.getsize(src_path)
+            if shutil.disk_usage(dest).free < file_size:
+                self.after(0, lambda: messagebox.showerror("Error", "Insufficient disk space. Transfer aborted."))
+                break
             dt = get_date_taken(src_path)
             if dt is None:
                 try:
@@ -542,10 +552,10 @@ class FamilyFileMover(ThemedTk):
                     continue
             new_file = self.get_unique_filename(target_dir, file)
             dest_path = os.path.join(target_dir, new_file)
-            # Reset current file progress bar.
             self.after(0, lambda: self.current_progress.config(value=0))
             try:
-                self.copy_file_with_progress(src_path, dest_path)
+                self.copy_file_with_progress(src_path, dest_path,
+                                             lambda percent: self.current_progress.config(value=percent))
             except Exception as e:
                 self.after(0, lambda e=e, f=file: self.show_and_log_error("Error", f"Failed to move '{f}': {e}"))
                 continue
@@ -574,7 +584,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_file_list()
 
     def transfer_files(self):
-        pass  # Not used; start_transfer() is used.
+        pass  # Not used; start_transfer() is the threaded operation.
 
     def convert_files(self):
         self.error_log.configure(state="normal")
