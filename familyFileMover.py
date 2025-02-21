@@ -87,13 +87,11 @@ def get_date_taken(file_path):
             return None
     video_extensions = {".mov", ".mp4", ".avi", ".mkv", ".wmv"}
     if ext in video_extensions:
-        # First, try to use the file's modification time.
         try:
             mod_time = os.path.getmtime(file_path)
             return datetime.fromtimestamp(mod_time)
         except Exception:
             pass
-        # Next, try to extract metadata via MediaInfo.
         if MediaInfo is not None:
             try:
                 media_info = MediaInfo.parse(file_path)
@@ -113,7 +111,6 @@ def get_date_taken(file_path):
                                     sys.stderr.write(f"Error parsing video date for '{file_path}': {e2}\n")
             except Exception as e:
                 sys.stderr.write(f"Error extracting video metadata from '{file_path}': {e}\n")
-        # Fallback: if no metadata found, use the current date.
         return datetime.now()
     if file_path.lower().endswith('.heic'):
         if Image is not None:
@@ -184,7 +181,7 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.itemconfig(self.inner_frame_id, width=event.width)
 
 
-# Custom copy function that copies in chunks, updates progress, and cleans up partial files if error occurs.
+# Custom file copy with per-file progress and cleanup.
 def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024):
     total_size = os.path.getsize(src)
     copied = 0
@@ -300,25 +297,38 @@ class FamilyFileMover(ThemedTk):
         self.convert_button = ttk.Button(self.conversion_frame, text="Convert", command=self.convert_files)
         self.convert_button.grid(row=1, column=3, padx=5, pady=5)
 
-        # File List Selection with "Select Next" feature.
+        # File List Selection with Search and "Select Next" feature.
         self.file_list_frame = ttk.LabelFrame(self.main_tab, text="Select Files to Move")
         self.file_list_frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
         self.file_list_frame.columnconfigure(0, weight=1)
+        # Search area.
+        search_frame = ttk.Frame(self.file_list_frame)
+        search_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
+        ttk.Label(search_frame, text="Search:").grid(row=0, column=0, padx=5, pady=5)
+        self.search_entry = ttk.Entry(search_frame, width=20)
+        self.search_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.search_button = ttk.Button(search_frame, text="Search", command=self.refresh_file_list)
+        self.search_button.grid(row=0, column=2, padx=5, pady=5)
+        self.clear_search_button = ttk.Button(search_frame, text="Clear", command=self.clear_search)
+        self.clear_search_button.grid(row=0, column=3, padx=5, pady=5)
+
+        # Selection row.
         self.select_all_cb = ttk.Checkbutton(self.file_list_frame, text="Select All", variable=self.select_all_var,
                                              command=self.toggle_select_all)
-        self.select_all_cb.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.select_all_cb.grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.selection_count_label = ttk.Label(self.file_list_frame, text="Selected: 0 / 0")
-        self.selection_count_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.selection_count_label.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         self.select_next_entry = ttk.Entry(self.file_list_frame, width=5)
-        self.select_next_entry.grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.select_next_entry.grid(row=1, column=2, sticky="w", padx=5, pady=5)
         self.select_next_button = ttk.Button(self.file_list_frame, text="Select Next", command=self.select_next_files)
-        self.select_next_button.grid(row=0, column=3, sticky="w", padx=5, pady=5)
-        self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
-        self.scrollable_file_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
-        self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
-        self.refresh_button.grid(row=2, column=0, columnspan=4, sticky="e", padx=5, pady=5)
+        self.select_next_button.grid(row=1, column=3, sticky="w", padx=5, pady=5)
 
-        # Operations: Overall progress, current file progress, and estimated time.
+        self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
+        self.scrollable_file_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
+        self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
+        self.refresh_button.grid(row=3, column=0, columnspan=4, sticky="e", padx=5, pady=5)
+
+        # Operations area: overall progress, current file progress, estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
@@ -349,6 +359,10 @@ class FamilyFileMover(ThemedTk):
                                                             self.error_log.delete("1.0", tk.END),
                                                             self.error_log.configure(state="disabled")))
         self.clear_log_button.pack(pady=5)
+
+    def clear_search(self):
+        self.search_entry.delete(0, tk.END)
+        self.refresh_file_list()
 
     def update_selection_count(self):
         total = len(self.file_check_vars)
@@ -440,19 +454,22 @@ class FamilyFileMover(ThemedTk):
             if self.music_var.get():
                 allowed_extensions.extend([".mp3", ".wav", ".flac"])
             allowed_extensions = list(set(allowed_extensions))
+        search_term = self.search_entry.get().strip().lower() if hasattr(self, "search_entry") else ""
         try:
             for file in os.listdir(source_dir):
                 if allowed_extensions is not None:
                     _, ext = os.path.splitext(file)
                     if ext.lower() not in allowed_extensions:
                         continue
+                if search_term and search_term not in file.lower():
+                    continue
                 var = tk.BooleanVar(value=self.select_all_var.get())
                 var.trace_add("write", lambda *args: self.update_selection_count())
                 chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=file, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
                 self.file_check_vars[file] = var
             self.update_selection_count()
-            self.scrollable_file_frame.canvas.yview_moveto(0)  # Reset scroll to top.
+            self.scrollable_file_frame.canvas.yview_moveto(0)
         except Exception as e:
             self.show_and_log_error("Error", f"Error reading source directory:\n{e}")
             self.update_selection_count()
@@ -482,7 +499,7 @@ class FamilyFileMover(ThemedTk):
                     break
         self.update_selection_count()
 
-    # --- Custom file copy with per-file progress and error cleanup ---
+    # --- Custom file copy with per-file progress and cleanup ---
     def copy_file_with_progress(self, src, dest, progress_callback, chunk_size=1024 * 1024):
         total_size = os.path.getsize(src)
         copied = 0
@@ -525,15 +542,18 @@ class FamilyFileMover(ThemedTk):
                 self.after(0, lambda: self.progress_label.config(text="0%"))
                 self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
                 self.after(0, lambda: self.current_progress.config(value=0))
-                self.after(0, lambda: self.current_file_label.config(text="Current file: None"))
+                # Do not reset current_file_label so that the failed file is still shown.
                 self.after(0, lambda: messagebox.showinfo("Cancelled", "Transfer cancelled by user."))
                 break
             self.after(0, lambda f=file: self.current_file_label.config(text=f"Current file: {f}"))
             src_path = os.path.join(source, file)
-            # Check free space before copying:
+            # Check free space before copying.
             file_size = os.path.getsize(src_path)
             if shutil.disk_usage(dest).free < file_size:
-                self.after(0, lambda: messagebox.showerror("Error", "Insufficient disk space. Transfer aborted."))
+                self.after(0,
+                           lambda f=file: self.log_error(f"Insufficient disk space for file '{f}'. Transfer aborted."))
+                self.after(0, lambda f=file: messagebox.showerror("Error",
+                                                                  f"Insufficient disk space while transferring '{f}'. Transfer aborted."))
                 break
             dt = get_date_taken(src_path)
             if dt is None:
@@ -584,7 +604,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_file_list()
 
     def transfer_files(self):
-        pass  # Not used; start_transfer() is the threaded operation.
+        pass  # Not used; start_transfer() is used.
 
     def convert_files(self):
         self.error_log.configure(state="normal")
