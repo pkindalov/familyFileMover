@@ -44,7 +44,6 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
-# Helper: recursively calculate folder size.
 def get_folder_size(path):
     total = 0
     for dirpath, dirnames, filenames in os.walk(path):
@@ -55,7 +54,6 @@ def get_folder_size(path):
     return total
 
 
-# Redirect stderr output to a widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -174,7 +172,6 @@ def get_date_taken(file_path):
     return None
 
 
-# A ScrollableFrame whose inner frame width always matches the container.
 class ScrollableFrame(ttk.Frame):
     def __init__(self, parent, height=300, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
@@ -192,7 +189,6 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.itemconfig(self.inner_frame_id, width=event.width)
 
 
-# Custom file copy with per-file progress and cleanup.
 def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024):
     total_size = os.path.getsize(src)
     copied = 0
@@ -212,7 +208,6 @@ def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024
     os.remove(src)
 
 
-# Custom folder copy with progress.
 def copy_folder_with_progress(src, dest, overall_progress_callback, file_progress_callback, chunk_size=1024 * 1024):
     total_size = get_folder_size(src)
     copied_total = 0
@@ -253,18 +248,16 @@ class FamilyFileMover(ThemedTk):
         self.geometry("600x700")
         self.resizable(False, False)
 
-        # Initialize variables.
         self.settings = load_settings()
         self.file_check_vars = {}  # Keys are item names (files or directories)
         self.select_all_var = tk.BooleanVar(value=False)
-        self.cancel_transfer = False  # For cancelling transfers
+        self.cancel_transfer = False
 
         self.style = ttk.Style(self)
         self.style.configure("TLabelFrame", font=("Segoe UI", 11, "bold"), padding=10)
         self.style.configure("TButton", font=("Segoe UI", 10), padding=5)
         self.style.configure("TLabel", font=("Segoe UI", 10))
 
-        # Create Notebook with Main and Logs tabs.
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
         self.main_tab = ttk.Frame(self.notebook)
@@ -346,7 +339,6 @@ class FamilyFileMover(ThemedTk):
         self.file_list_frame = ttk.LabelFrame(self.main_tab, text="Select Files to Move")
         self.file_list_frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
         self.file_list_frame.columnconfigure(0, weight=1)
-        # Search area.
         search_frame = ttk.Frame(self.file_list_frame)
         search_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
         ttk.Label(search_frame, text="Search:").grid(row=0, column=0, padx=5, pady=5)
@@ -357,7 +349,6 @@ class FamilyFileMover(ThemedTk):
         self.clear_search_button = ttk.Button(search_frame, text="Clear", command=self.clear_search)
         self.clear_search_button.grid(row=0, column=3, padx=5, pady=5)
 
-        # Selection row.
         self.select_all_cb = ttk.Checkbutton(self.file_list_frame, text="Select All", variable=self.select_all_var,
                                              command=self.toggle_select_all)
         self.select_all_cb.grid(row=1, column=0, sticky="w", padx=5, pady=5)
@@ -373,7 +364,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=3, column=0, columnspan=4, sticky="e", padx=5, pady=5)
 
-        # Operations area: overall progress, current file progress, and estimated time.
+        # Operations area: overall progress, current file progress, percentage, estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
@@ -387,7 +378,6 @@ class FamilyFileMover(ThemedTk):
         self.current_file_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.current_progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.current_progress.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        # New label for current file percentage.
         self.current_percentage_label = ttk.Label(self.operations_frame, text="0%")
         self.current_percentage_label.grid(row=1, column=2, padx=5, pady=5, sticky="e")
         self.progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
@@ -534,7 +524,6 @@ class FamilyFileMover(ThemedTk):
             counter += 1
         return candidate
 
-    # --- Method to automatically select next N unselected items ---
     def select_next_files(self):
         try:
             n = int(self.select_next_entry.get())
@@ -550,7 +539,6 @@ class FamilyFileMover(ThemedTk):
                     break
         self.update_selection_count()
 
-    # --- Custom file copy with per-file progress and cleanup ---
     def copy_file_with_progress(self, src, dest, progress_callback, chunk_size=1024 * 1024):
         total_size = os.path.getsize(src)
         copied = 0
@@ -569,7 +557,6 @@ class FamilyFileMover(ThemedTk):
             raise e
         os.remove(src)
 
-    # --- Custom folder copy with progress ---
     def copy_folder_with_progress(self, src, dest, overall_progress_callback, file_progress_callback,
                                   chunk_size=1024 * 1024):
         total_size = get_folder_size(src)
@@ -603,7 +590,6 @@ class FamilyFileMover(ThemedTk):
                 os.remove(src_file)
         shutil.rmtree(src)
 
-    # --- Threaded transfer with cancellation, estimated time, and individual progress ---
     def start_transfer(self):
         selected_items = [item for item, var in self.file_check_vars.items() if var.get()]
         if not selected_items:
@@ -664,7 +650,6 @@ class FamilyFileMover(ThemedTk):
             dest_path = os.path.join(target_dir, new_item)
             if os.path.isfile(src_path):
                 self.after(0, lambda: self.current_progress.config(value=0))
-                # Update current file percentage label along with progress.
                 try:
                     self.copy_file_with_progress(src_path, dest_path,
                                                  lambda percent: (self.current_progress.config(value=percent),
@@ -675,7 +660,6 @@ class FamilyFileMover(ThemedTk):
                     self.after(0, lambda e=e, it=item: self.show_and_log_error("Error", f"Failed to move '{it}': {e}"))
                     continue
             elif os.path.isdir(src_path):
-                # For folders, copy recursively with progress.
                 def overall_cb(overall_percent):
                     self.current_progress.config(value=overall_percent)
                     self.current_percentage_label.config(text=f"{int(overall_percent)}%")
@@ -701,6 +685,8 @@ class FamilyFileMover(ThemedTk):
             remaining = avg * (total_items - (i + 1))
             remaining_str = str(remaining).split('.')[0]
             self.after(0, lambda rs=remaining_str: self.estimated_label.config(text=f"Estimated time remaining: {rs}"))
+            # Update file list after each transferred item.
+            self.after(0, self.refresh_file_list)
             self.after(0, self.update_idletasks)
         self.after(0, lambda: self.transfer_button.config(state="normal"))
         self.after(0, lambda: self.cancel_button.config(state="disabled"))
@@ -718,7 +704,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_file_list()
 
     def transfer_files(self):
-        pass  # Not used; start_transfer() is the threaded operation.
+        pass
 
     def convert_files(self):
         self.error_log.configure(state="normal")
