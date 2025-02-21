@@ -44,6 +44,17 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
+# Helper: recursively calculate folder size.
+def get_folder_size(path):
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if os.path.exists(fp):
+                total += os.path.getsize(fp)
+    return total
+
+
 # Redirect stderr output to a widget.
 class ErrorLogger:
     def __init__(self, widget):
@@ -201,6 +212,40 @@ def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024
     os.remove(src)
 
 
+# Custom folder copy with progress.
+def copy_folder_with_progress(src, dest, overall_progress_callback, file_progress_callback, chunk_size=1024 * 1024):
+    total_size = get_folder_size(src)
+    copied_total = 0
+    if not os.path.exists(dest):
+        os.makedirs(dest)
+    for root, dirs, files in os.walk(src):
+        rel_path = os.path.relpath(root, src)
+        dest_dir = os.path.join(dest, rel_path)
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+        for f in files:
+            src_file = os.path.join(root, f)
+            dest_file = os.path.join(dest_dir, f)
+            file_size = os.path.getsize(src_file)
+            copied_file = 0
+            file_progress_callback(0, f)
+            with open(src_file, "rb") as fsrc, open(dest_file, "wb") as fdst:
+                while True:
+                    chunk = fsrc.read(chunk_size)
+                    if not chunk:
+                        break
+                    fdst.write(chunk)
+                    copied = len(chunk)
+                    copied_file += copied
+                    copied_total += copied
+                    fp_percent = (copied_file / file_size) * 100
+                    file_progress_callback(fp_percent, f)
+                    overall_progress = (copied_total / total_size) * 100
+                    overall_progress_callback(overall_progress)
+            os.remove(src_file)
+    shutil.rmtree(src)
+
+
 class FamilyFileMover(ThemedTk):
     def __init__(self):
         super().__init__(theme="arc")
@@ -210,7 +255,7 @@ class FamilyFileMover(ThemedTk):
 
         # Initialize variables.
         self.settings = load_settings()
-        self.file_check_vars = {}
+        self.file_check_vars = {}  # Keys are item names (files or directories)
         self.select_all_var = tk.BooleanVar(value=False)
         self.cancel_transfer = False  # For cancelling transfers
 
@@ -328,20 +373,23 @@ class FamilyFileMover(ThemedTk):
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=3, column=0, columnspan=4, sticky="e", padx=5, pady=5)
 
-        # Operations area: overall progress, current file progress, estimated time.
+        # Operations area: overall progress, current file progress, and estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
-        self.transfer_button = ttk.Button(self.operations_frame, text="Transfer Files", command=self.start_transfer)
+        self.transfer_button = ttk.Button(self.operations_frame, text="Transfer Items", command=self.start_transfer)
         self.transfer_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.cancel_button = ttk.Button(self.operations_frame, text="Cancel Transfer",
                                         command=self.cancel_transfer_func)
         self.cancel_button.grid(row=0, column=1, padx=5, pady=5, sticky="e")
         self.cancel_button.config(state="disabled")
-        self.current_file_label = ttk.Label(self.operations_frame, text="Current file: None")
+        self.current_file_label = ttk.Label(self.operations_frame, text="Current item: None")
         self.current_file_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.current_progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.current_progress.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        # New label for current file percentage.
+        self.current_percentage_label = ttk.Label(self.operations_frame, text="0%")
+        self.current_percentage_label.grid(row=1, column=2, padx=5, pady=5, sticky="e")
         self.progress = ttk.Progressbar(self.operations_frame, orient="horizontal", mode="determinate")
         self.progress.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         self.progress_label = ttk.Label(self.operations_frame, text="0%")
@@ -456,34 +504,37 @@ class FamilyFileMover(ThemedTk):
             allowed_extensions = list(set(allowed_extensions))
         search_term = self.search_entry.get().strip().lower() if hasattr(self, "search_entry") else ""
         try:
-            for file in os.listdir(source_dir):
-                if allowed_extensions is not None:
-                    _, ext = os.path.splitext(file)
+            for item in os.listdir(source_dir):
+                full_path = os.path.join(source_dir, item)
+                if not (os.path.isfile(full_path) or os.path.isdir(full_path)):
+                    continue
+                if os.path.isfile(full_path) and allowed_extensions is not None:
+                    _, ext = os.path.splitext(item)
                     if ext.lower() not in allowed_extensions:
                         continue
-                if search_term and search_term not in file.lower():
+                if search_term and search_term not in item.lower():
                     continue
                 var = tk.BooleanVar(value=self.select_all_var.get())
                 var.trace_add("write", lambda *args: self.update_selection_count())
-                chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=file, variable=var)
+                chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=item, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
-                self.file_check_vars[file] = var
+                self.file_check_vars[item] = var
             self.update_selection_count()
             self.scrollable_file_frame.canvas.yview_moveto(0)
         except Exception as e:
             self.show_and_log_error("Error", f"Error reading source directory:\n{e}")
             self.update_selection_count()
 
-    def get_unique_filename(self, directory, filename):
-        base, ext = os.path.splitext(filename)
-        candidate = filename
+    def get_unique_filename(self, directory, name):
+        base, ext = os.path.splitext(name)
+        candidate = name
         counter = 2
         while os.path.exists(os.path.join(directory, candidate)):
             candidate = f"{base}({counter}){ext}"
             counter += 1
         return candidate
 
-    # --- Method to automatically select next N unselected files ---
+    # --- Method to automatically select next N unselected items ---
     def select_next_files(self):
         try:
             n = int(self.select_next_entry.get())
@@ -491,7 +542,7 @@ class FamilyFileMover(ThemedTk):
             messagebox.showerror("Error", "Please enter a valid number.")
             return
         count = 0
-        for file, var in self.file_check_vars.items():
+        for item, var in self.file_check_vars.items():
             if not var.get():
                 var.set(True)
                 count += 1
@@ -518,73 +569,136 @@ class FamilyFileMover(ThemedTk):
             raise e
         os.remove(src)
 
-    # --- Threaded transfer with cancellation, estimated time, and individual file progress ---
+    # --- Custom folder copy with progress ---
+    def copy_folder_with_progress(self, src, dest, overall_progress_callback, file_progress_callback,
+                                  chunk_size=1024 * 1024):
+        total_size = get_folder_size(src)
+        copied_total = 0
+        if not os.path.exists(dest):
+            os.makedirs(dest)
+        for root, dirs, files in os.walk(src):
+            rel_path = os.path.relpath(root, src)
+            dest_dir = os.path.join(dest, rel_path)
+            if not os.path.exists(dest_dir):
+                os.makedirs(dest_dir)
+            for f in files:
+                src_file = os.path.join(root, f)
+                dest_file = os.path.join(dest_dir, f)
+                file_size = os.path.getsize(src_file)
+                copied_file = 0
+                file_progress_callback(0, f)
+                with open(src_file, "rb") as fsrc, open(dest_file, "wb") as fdst:
+                    while True:
+                        chunk = fsrc.read(chunk_size)
+                        if not chunk:
+                            break
+                        fdst.write(chunk)
+                        copied = len(chunk)
+                        copied_file += copied
+                        copied_total += copied
+                        fp_percent = (copied_file / file_size) * 100
+                        file_progress_callback(fp_percent, f)
+                        overall_progress = (copied_total / total_size) * 100
+                        overall_progress_callback(overall_progress)
+                os.remove(src_file)
+        shutil.rmtree(src)
+
+    # --- Threaded transfer with cancellation, estimated time, and individual progress ---
     def start_transfer(self):
-        selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
-        if not selected_files:
-            messagebox.showinfo("No Files Selected", "Please select at least one file to transfer.")
+        selected_items = [item for item, var in self.file_check_vars.items() if var.get()]
+        if not selected_items:
+            messagebox.showinfo("No Items Selected", "Please select at least one file or folder to transfer.")
             return
         self.cancel_transfer = False
         self.transfer_button.config(state="disabled")
         self.cancel_button.config(state="normal")
         self.transfer_start_time = datetime.now()
-        threading.Thread(target=self.transfer_files_thread, daemon=True).start()
+        threading.Thread(target=self.transfer_items_thread, daemon=True).start()
 
-    def transfer_files_thread(self):
+    def transfer_items_thread(self):
         source = self.source_entry.get().strip()
         dest = self.dest_entry.get().strip()
         base_folder = self.base_entry.get().strip() or "FamilyMedia"
-        selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
-        total_files = len(selected_files)
-        for i, file in enumerate(selected_files):
+        selected_items = [item for item, var in self.file_check_vars.items() if var.get()]
+        total_items = len(selected_items)
+        for i, item in enumerate(selected_items):
             if self.cancel_transfer:
                 self.after(0, lambda: self.progress.config(value=0))
                 self.after(0, lambda: self.progress_label.config(text="0%"))
                 self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
                 self.after(0, lambda: self.current_progress.config(value=0))
-                # Do not reset current_file_label so that the failed file is still shown.
                 self.after(0, lambda: messagebox.showinfo("Cancelled", "Transfer cancelled by user."))
                 break
-            self.after(0, lambda f=file: self.current_file_label.config(text=f"Current file: {f}"))
-            src_path = os.path.join(source, file)
-            # Check free space before copying.
-            file_size = os.path.getsize(src_path)
-            if shutil.disk_usage(dest).free < file_size:
-                self.after(0,
-                           lambda f=file: self.log_error(f"Insufficient disk space for file '{f}'. Transfer aborted."))
-                self.after(0, lambda f=file: messagebox.showerror("Error",
-                                                                  f"Insufficient disk space while transferring '{f}'. Transfer aborted."))
+            self.after(0, lambda it=item: self.current_file_label.config(text=f"Current item: {it}"))
+            src_path = os.path.join(source, item)
+            if os.path.isfile(src_path):
+                item_size = os.path.getsize(src_path)
+            elif os.path.isdir(src_path):
+                item_size = get_folder_size(src_path)
+            else:
+                continue
+            if shutil.disk_usage(dest).free < item_size:
+                self.after(0, lambda it=item: self.log_error(f"Insufficient disk space for '{it}'. Transfer aborted."))
+                self.after(0, lambda it=item: messagebox.showerror("Error",
+                                                                   f"Insufficient disk space while transferring '{it}'. Transfer aborted."))
                 break
-            dt = get_date_taken(src_path)
-            if dt is None:
-                try:
-                    dt = datetime.fromtimestamp(os.path.getmtime(src_path))
-                except Exception:
-                    dt = datetime.now()
+            if os.path.isdir(src_path):
+                dt = datetime.fromtimestamp(os.path.getmtime(src_path))
+            else:
+                dt = get_date_taken(src_path)
+                if dt is None:
+                    try:
+                        dt = datetime.fromtimestamp(os.path.getmtime(src_path))
+                    except Exception:
+                        dt = datetime.now()
             year, month, day = dt.strftime("%Y"), dt.strftime("%B"), dt.strftime("%d")
             target_dir = os.path.join(dest, base_folder, year, month, day)
             if not os.path.exists(target_dir):
                 try:
                     os.makedirs(target_dir)
                 except Exception as e:
-                    self.after(0, lambda e=e, f=file: self.show_and_log_error("Error",
-                                                                              f"Failed to create directory {target_dir} for '{f}':\n{e}"))
+                    self.after(0, lambda e=e, it=item: self.show_and_log_error("Error",
+                                                                               f"Failed to create directory {target_dir} for '{it}':\n{e}"))
                     continue
-            new_file = self.get_unique_filename(target_dir, file)
-            dest_path = os.path.join(target_dir, new_file)
-            self.after(0, lambda: self.current_progress.config(value=0))
-            try:
-                self.copy_file_with_progress(src_path, dest_path,
-                                             lambda percent: self.current_progress.config(value=percent))
-            except Exception as e:
-                self.after(0, lambda e=e, f=file: self.show_and_log_error("Error", f"Failed to move '{f}': {e}"))
-                continue
-            progress_value = ((i + 1) / total_files) * 100
-            self.after(0, lambda value=progress_value: self.progress.config(value=value))
-            self.after(0, lambda value=progress_value: self.progress_label.config(text=f"{int(value)}%"))
+            new_item = self.get_unique_filename(target_dir, item)
+            dest_path = os.path.join(target_dir, new_item)
+            if os.path.isfile(src_path):
+                self.after(0, lambda: self.current_progress.config(value=0))
+                # Update current file percentage label along with progress.
+                try:
+                    self.copy_file_with_progress(src_path, dest_path,
+                                                 lambda percent: (self.current_progress.config(value=percent),
+                                                                  self.current_percentage_label.config(
+                                                                      text=f"{int(percent)}%"))
+                                                 )
+                except Exception as e:
+                    self.after(0, lambda e=e, it=item: self.show_and_log_error("Error", f"Failed to move '{it}': {e}"))
+                    continue
+            elif os.path.isdir(src_path):
+                # For folders, copy recursively with progress.
+                def overall_cb(overall_percent):
+                    self.current_progress.config(value=overall_percent)
+                    self.current_percentage_label.config(text=f"{int(overall_percent)}%")
+
+                def file_cb(fp_percent, fname):
+                    self.current_progress.config(value=fp_percent)
+                    self.current_percentage_label.config(text=f"{int(fp_percent)}%")
+                    self.current_file_label.config(text=f"Copying: {fname}")
+
+                try:
+                    copy_folder_with_progress(src_path, dest_path, overall_cb, file_cb)
+                    self.after(0, lambda: self.current_progress.config(value=100))
+                    self.after(0, lambda: self.current_percentage_label.config(text="100%"))
+                except Exception as e:
+                    self.after(0, lambda e=e, it=item: self.show_and_log_error("Error",
+                                                                               f"Failed to move folder '{it}': {e}"))
+                    continue
+            overall_progress = ((i + 1) / total_items) * 100
+            self.after(0, lambda value=overall_progress: self.progress.config(value=value))
+            self.after(0, lambda value=overall_progress: self.progress_label.config(text=f"{int(value)}%"))
             elapsed = datetime.now() - self.transfer_start_time
             avg = elapsed / (i + 1)
-            remaining = avg * (total_files - (i + 1))
+            remaining = avg * (total_items - (i + 1))
             remaining_str = str(remaining).split('.')[0]
             self.after(0, lambda rs=remaining_str: self.estimated_label.config(text=f"Estimated time remaining: {rs}"))
             self.after(0, self.update_idletasks)
@@ -593,7 +707,7 @@ class FamilyFileMover(ThemedTk):
         self.after(0, lambda: self.progress.config(value=0))
         self.after(0, lambda: self.progress_label.config(text="0%"))
         self.after(0, lambda: self.estimated_label.config(text="Estimated time remaining: --:--:--"))
-        self.after(0, lambda: self.current_file_label.config(text="Current file: None"))
+        self.after(0, lambda: self.current_file_label.config(text="Current item: None"))
         self.after(0, self.refresh_file_list)
         self.after(0, lambda: self.scrollable_file_frame.canvas.yview_moveto(0))
 
@@ -604,7 +718,7 @@ class FamilyFileMover(ThemedTk):
         self.refresh_file_list()
 
     def transfer_files(self):
-        pass  # Not used; start_transfer() is used.
+        pass  # Not used; start_transfer() is the threaded operation.
 
     def convert_files(self):
         self.error_log.configure(state="normal")
@@ -619,32 +733,33 @@ class FamilyFileMover(ThemedTk):
         if not source or not os.path.isdir(source):
             self.show_and_log_error("Error", "Please select a valid source folder.")
             return
-        selected_files = [f for f, var in self.file_check_vars.items() if var.get()]
-        if not selected_files:
-            messagebox.showinfo("Info", "No files selected for conversion.")
+        selected_items = [item for item, var in self.file_check_vars.items() if var.get()]
+        if not selected_items:
+            messagebox.showinfo("Info", "No items selected for conversion.")
             return
-        total_files = len(selected_files)
+        total_items = len(selected_items)
         self.progress['value'] = 0
-        for i, file in enumerate(selected_files):
-            src_path = os.path.join(source, file)
-            file_ext = os.path.splitext(file)[1].lower()
-            if file_ext == "." + conv_in:
-                try:
-                    im = Image.open(src_path)
-                    format_mapping = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "gif": "GIF", "bmp": "BMP"}
-                    out_format = format_mapping.get(conv_out, conv_out.upper())
-                    new_file = os.path.splitext(file)[0] + "." + conv_out
-                    target_dir = os.path.dirname(src_path)
-                    dest_path = os.path.join(target_dir, new_file)
-                    if out_format in ("JPEG", "JPG"):
-                        im.convert("RGB").save(dest_path, out_format, quality=self.jpeg_quality.get())
-                    else:
-                        im.save(dest_path, out_format)
-                except Exception as e:
-                    self.show_and_log_error("Error", f"Failed to convert '{file}': {e}")
-            progress_value = ((i + 1) / total_files) * 100
-            self.progress['value'] = progress_value
-            self.progress_label.config(text=f"{int(progress_value)}%")
+        for i, item in enumerate(selected_items):
+            src_path = os.path.join(source, item)
+            if os.path.isfile(src_path):
+                file_ext = os.path.splitext(item)[1].lower()
+                if file_ext == "." + conv_in:
+                    try:
+                        im = Image.open(src_path)
+                        format_mapping = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "gif": "GIF", "bmp": "BMP"}
+                        out_format = format_mapping.get(conv_out, conv_out.upper())
+                        new_item = os.path.splitext(item)[0] + "." + conv_out
+                        target_dir = os.path.dirname(src_path)
+                        dest_path = os.path.join(target_dir, new_item)
+                        if out_format in ("JPEG", "JPG"):
+                            im.convert("RGB").save(dest_path, out_format, quality=self.jpeg_quality.get())
+                        else:
+                            im.save(dest_path, out_format)
+                    except Exception as e:
+                        self.show_and_log_error("Error", f"Failed to convert '{item}': {e}")
+            overall_progress = ((i + 1) / total_items) * 100
+            self.progress['value'] = overall_progress
+            self.progress_label.config(text=f"{int(overall_progress)}%")
             self.update_idletasks()
         messagebox.showinfo("Info", "Conversion complete!")
         self.progress['value'] = 0
