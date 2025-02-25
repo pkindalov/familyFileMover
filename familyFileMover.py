@@ -178,26 +178,40 @@ def get_date_taken(file_path):
 def extract_date_from_folder_name(folder_name):
     """
     Try to extract a full date (day, month, year) from the folder name.
+    Supports three formats:
+      - DD[-_]MM[-_]YYYY
+      - MM[-_]DD[-_]YYYY
+      - YYYY[-_]MM[-_]DD
     If a full date is found but invalid, return the current date.
     If no full date is found, return None.
     """
-    # Look for a DD[-_]MM[-_]YYYY pattern
-    match = re.search(r'(\d{1,2})[-_](\d{1,2})[-_](\d{4})', folder_name)
+    # Look for a DD[-_]MM[-_]YYYY pattern (day-month-year)
+    match = re.search(r'\b(3[0-1]|[12]\d|0?[1-9])[-_](1[0-2]|0?[1-9])[-_](\d{4})\b', folder_name)
     if match:
         try:
             day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
             return datetime(year, month, day)
         except ValueError:
-            # If the full date is invalid, fall back to current date.
             return datetime.now()
-    # Look for a YYYY[-_]MM[-_]DD pattern if no DD-MM-YYYY is found
-    match = re.search(r'(\d{4})[-_](\d{1,2})[-_](\d{1,2})', folder_name)
+
+    # Look for a MM[-_]DD[-_]YYYY pattern (month-day-year)
+    match = re.search(r'\b(1[0-2]|0?[1-9])[-_](3[0-1]|[12]\d|0?[1-9])[-_](\d{4})\b', folder_name)
+    if match:
+        try:
+            month, day, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return datetime(year, month, day)
+        except ValueError:
+            return datetime.now()
+
+    # Look for a YYYY[-_]MM[-_]DD pattern (ISO format)
+    match = re.search(r'\b(\d{4})[-_](1[0-2]|0?[1-9])[-_](3[0-1]|[12]\d|0?[1-9])\b', folder_name)
     if match:
         try:
             year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
             return datetime(year, month, day)
         except ValueError:
             return datetime.now()
+
     return None
 
 class ScrollableFrame(ttk.Frame):
