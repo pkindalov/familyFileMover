@@ -2,14 +2,13 @@ from ttkthemes import ThemedTk
 import threading
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import tkinter as tk
-import os, sys, json, shutil
+import os, sys, json, shutil, re
 from datetime import datetime, timedelta
 import zipfile, xml.etree.ElementTree as ET
 
 # Optional libraries
 try:
     import pillow_heif
-
     pillow_heif.register_heif_opener()
 except ImportError:
     print("pillow-heif not installed")
@@ -28,7 +27,6 @@ except ImportError:
 
 SETTINGS_FILE = "settings.json"
 
-
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -38,11 +36,9 @@ def load_settings():
             return {}
     return {}
 
-
 def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=4)
-
 
 # Helper to format byte sizes.
 def format_size(num_bytes):
@@ -51,7 +47,6 @@ def format_size(num_bytes):
             return f"{num_bytes:.2f} {unit}"
         num_bytes /= 1024
     return f"{num_bytes:.2f} PB"
-
 
 # Helper: recursively calculate folder size.
 def get_folder_size(path):
@@ -62,7 +57,6 @@ def get_folder_size(path):
             if os.path.exists(fp):
                 total += os.path.getsize(fp)
     return total
-
 
 # Redirect stderr output to a widget.
 class ErrorLogger:
@@ -79,7 +73,6 @@ class ErrorLogger:
 
     def flush(self):
         pass
-
 
 def get_date_taken(file_path):
     ext = os.path.splitext(file_path)[1].lower()
@@ -182,6 +175,36 @@ def get_date_taken(file_path):
             sys.stderr.write(f"Error extracting EXIF with Pillow for '{file_path}': {e}\n")
     return None
 
+def extract_date_from_folder_name(folder_name):
+    """
+    Try to extract a date from the folder name using common patterns.
+    Returns a datetime object if successful, otherwise None.
+    """
+    # Pattern 1: YYYY[-_]MM[-_]DD (e.g., 2021-12-31 or 2021_12_31)
+    match = re.search(r'(\d{4})[-_](\d{1,2})[-_](\d{1,2})', folder_name)
+    if match:
+        try:
+            year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return datetime(year, month, day)
+        except ValueError:
+            pass
+    # Pattern 2: DD[-_]MM[-_]YYYY (e.g., 31-12-2021)
+    match = re.search(r'(\d{1,2})[-_](\d{1,2})[-_](\d{4})', folder_name)
+    if match:
+        try:
+            day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            return datetime(year, month, day)
+        except ValueError:
+            pass
+    # Pattern 3: Only a 4-digit year (e.g., "2021")
+    match = re.search(r'(19|20)\d{2}', folder_name)
+    if match:
+        try:
+            year = int(match.group(0))
+            return datetime(year, 1, 1)
+        except ValueError:
+            pass
+    return None
 
 class ScrollableFrame(ttk.Frame):
     def __init__(self, parent, height=300, *args, **kwargs):
@@ -198,7 +221,6 @@ class ScrollableFrame(ttk.Frame):
 
     def on_container_configure(self, event):
         self.canvas.itemconfig(self.inner_frame_id, width=event.width)
-
 
 def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024):
     total_size = os.path.getsize(src)
@@ -217,7 +239,6 @@ def copy_file_with_progress(src, dest, progress_callback, chunk_size=1024 * 1024
             os.remove(dest)
         raise e
     os.remove(src)
-
 
 def copy_folder_with_progress(src, dest, overall_progress_callback, file_progress_callback, chunk_size=1024 * 1024):
     total_size = get_folder_size(src)
@@ -250,7 +271,6 @@ def copy_folder_with_progress(src, dest, overall_progress_callback, file_progres
                     overall_progress_callback(overall_progress)
             os.remove(src_file)
     shutil.rmtree(src)
-
 
 class FamilyFileMover(ThemedTk):
     def __init__(self):
@@ -651,11 +671,16 @@ class FamilyFileMover(ThemedTk):
                 continue
             if shutil.disk_usage(dest).free < item_size:
                 self.after(0, lambda it=item: self.log_error(f"Insufficient disk space for '{it}'. Transfer aborted."))
-                self.after(0, lambda it=item: messagebox.showerror("Error",
-                                                                   f"Insufficient disk space while transferring '{it}'. Transfer aborted."))
+                self.after(0, lambda it=item: self.show_and_log_error("Error",
+                                                                       f"Insufficient disk space while transferring '{it}'. Transfer aborted."))
                 break
             if os.path.isdir(src_path):
-                dt = datetime.fromtimestamp(os.path.getmtime(src_path))
+                # Attempt to extract a date from the folder name.
+                extracted_date = extract_date_from_folder_name(item)
+                if extracted_date is not None:
+                    dt = extracted_date
+                else:
+                    dt = datetime.fromtimestamp(os.path.getmtime(src_path))
             else:
                 dt = get_date_taken(src_path)
                 if dt is None:
@@ -794,7 +819,6 @@ class FamilyFileMover(ThemedTk):
         }
         save_settings(self.settings)
         self.destroy()
-
 
 if __name__ == "__main__":
     app = FamilyFileMover()
