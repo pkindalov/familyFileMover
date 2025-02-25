@@ -201,7 +201,7 @@ def extract_date_from_folder_name(folder_name):
     return None
 
 class ScrollableFrame(ttk.Frame):
-    def __init__(self, parent, height=300, *args, **kwargs):
+    def __init__(self, parent, height=400, *args, **kwargs):  # increased height from 300 to 400
         super().__init__(parent, *args, **kwargs)
         self.canvas = tk.Canvas(self, borderwidth=0, height=height)
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
@@ -270,7 +270,7 @@ class FamilyFileMover(ThemedTk):
     def __init__(self):
         super().__init__(theme="arc")
         self.title("Family File Mover")
-        self.geometry("600x700")
+        self.geometry("600x850")
         self.resizable(False, False)
 
         self.settings = load_settings()
@@ -388,7 +388,8 @@ class FamilyFileMover(ThemedTk):
         self.selected_size_label = ttk.Label(self.file_list_frame, text="Total Selected Size: 0.00 B")
         self.selected_size_label.grid(row=2, column=0, columnspan=4, sticky="w", padx=5, pady=5)
 
-        self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
+        # Use a taller scrollable frame now (height set to 400)
+        self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=400)
         self.scrollable_file_frame.grid(row=3, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
         self.refresh_button.grid(row=4, column=0, columnspan=4, sticky="e", padx=5, pady=5)
@@ -546,7 +547,9 @@ class FamilyFileMover(ThemedTk):
                     continue
                 var = tk.BooleanVar(value=self.select_all_var.get())
                 var.trace_add("write", lambda *args: self.update_selection_count())
-                chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=item, variable=var)
+                # Prepend an icon: folder emoji for directories, file emoji for files.
+                icon = "📁 " if os.path.isdir(full_path) else "📄 "
+                chk = ttk.Checkbutton(self.scrollable_file_frame.inner_frame, text=icon + item, variable=var)
                 chk.pack(anchor="w", padx=5, pady=2)
                 self.file_check_vars[item] = var
             self.update_selection_count()
