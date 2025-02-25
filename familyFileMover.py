@@ -44,6 +44,16 @@ def save_settings(settings):
         json.dump(settings, f, indent=4)
 
 
+# Helper to format byte sizes.
+def format_size(num_bytes):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if num_bytes < 1024:
+            return f"{num_bytes:.2f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.2f} PB"
+
+
+# Helper: recursively calculate folder size.
 def get_folder_size(path):
     total = 0
     for dirpath, dirnames, filenames in os.walk(path):
@@ -54,6 +64,7 @@ def get_folder_size(path):
     return total
 
 
+# Redirect stderr output to a widget.
 class ErrorLogger:
     def __init__(self, widget):
         self.widget = widget
@@ -249,7 +260,7 @@ class FamilyFileMover(ThemedTk):
         self.resizable(False, False)
 
         self.settings = load_settings()
-        self.file_check_vars = {}  # Keys are item names (files or directories)
+        self.file_check_vars = {}  # Keys: item names (files or folders)
         self.select_all_var = tk.BooleanVar(value=False)
         self.cancel_transfer = False
 
@@ -339,6 +350,7 @@ class FamilyFileMover(ThemedTk):
         self.file_list_frame = ttk.LabelFrame(self.main_tab, text="Select Files to Move")
         self.file_list_frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
         self.file_list_frame.columnconfigure(0, weight=1)
+        # Search area.
         search_frame = ttk.Frame(self.file_list_frame)
         search_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=5, pady=5)
         ttk.Label(search_frame, text="Search:").grid(row=0, column=0, padx=5, pady=5)
@@ -358,13 +370,16 @@ class FamilyFileMover(ThemedTk):
         self.select_next_entry.grid(row=1, column=2, sticky="w", padx=5, pady=5)
         self.select_next_button = ttk.Button(self.file_list_frame, text="Select Next", command=self.select_next_files)
         self.select_next_button.grid(row=1, column=3, sticky="w", padx=5, pady=5)
+        # New label: total selected size.
+        self.selected_size_label = ttk.Label(self.file_list_frame, text="Total Selected Size: 0.00 B")
+        self.selected_size_label.grid(row=2, column=0, columnspan=4, sticky="w", padx=5, pady=5)
 
         self.scrollable_file_frame = ScrollableFrame(self.file_list_frame, height=300)
-        self.scrollable_file_frame.grid(row=2, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
+        self.scrollable_file_frame.grid(row=3, column=0, columnspan=4, sticky="nsew", padx=5, pady=5)
         self.refresh_button = ttk.Button(self.file_list_frame, text="Refresh File List", command=self.refresh_file_list)
-        self.refresh_button.grid(row=3, column=0, columnspan=4, sticky="e", padx=5, pady=5)
+        self.refresh_button.grid(row=4, column=0, columnspan=4, sticky="e", padx=5, pady=5)
 
-        # Operations area: overall progress, current file progress, percentage, estimated time.
+        # Operations area: overall progress, current item progress and percentage, estimated time.
         self.operations_frame = ttk.Frame(self.main_tab)
         self.operations_frame.grid(row=4, column=0, sticky="ew", padx=5, pady=5)
         self.operations_frame.columnconfigure(0, weight=1)
@@ -406,6 +421,17 @@ class FamilyFileMover(ThemedTk):
         total = len(self.file_check_vars)
         selected = sum(var.get() for var in self.file_check_vars.values())
         self.selection_count_label.config(text=f"Selected: {selected} / {total}")
+        # Now update total size of selected items.
+        source_dir = self.source_entry.get().strip()
+        total_size = 0
+        for item, var in self.file_check_vars.items():
+            if var.get():
+                full_path = os.path.join(source_dir, item)
+                if os.path.isfile(full_path):
+                    total_size += os.path.getsize(full_path)
+                elif os.path.isdir(full_path):
+                    total_size += get_folder_size(full_path)
+        self.selected_size_label.config(text=f"Total Selected Size: {format_size(total_size)}")
 
     def log_error(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -685,7 +711,7 @@ class FamilyFileMover(ThemedTk):
             remaining = avg * (total_items - (i + 1))
             remaining_str = str(remaining).split('.')[0]
             self.after(0, lambda rs=remaining_str: self.estimated_label.config(text=f"Estimated time remaining: {rs}"))
-            # Update file list after each transferred item.
+            # Refresh file list after each transferred item.
             self.after(0, self.refresh_file_list)
             self.after(0, self.update_idletasks)
         self.after(0, lambda: self.transfer_button.config(state="normal"))
